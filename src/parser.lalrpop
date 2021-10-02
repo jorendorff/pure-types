@@ -1,0 +1,41 @@
+use crate::ast::{Expr, USort, Var};
+
+grammar;
+
+pub Term: Expr<USort> = {
+    "λ" "(" <p:Var> ":" <ty:Term> ")" "." <b:Term> =>
+        Expr::Lambda(p, Box::new(ty), Box::new(b)),
+    "Π" "(" <p:Var> ":" <ty:Term> ")" "." <b:Term> =>
+        Expr::Product(p, Box::new(ty), Box::new(b)),
+    <e:Op> =>
+        e,
+}
+
+Op: Expr<USort> = {
+    <e:Call> =>
+        e,
+    <left:Call> "->" <right:Op> =>
+        Expr::Product(Var::new("_"), Box::new(left), Box::new(right)),
+}
+
+Call: Expr<USort> = {
+    <p:Prim> =>
+        p,
+    <f:Call> <a:Prim> =>
+        Expr::Apply(Box::new(f), Box::new(a)),
+}
+
+Prim: Expr<USort> = {
+    "(" <t:Term> ")" =>
+        t,
+    <v:Var> =>
+        Expr::Var(v),
+    "Type" =>
+        Expr::ConstSort(USort::Type),
+    "Kind" =>
+        Expr::ConstSort(USort::Kind),
+    "Triangle" =>
+        Expr::ConstSort(USort::Triangle),
+}
+
+Var: Var = <s:r"\w+"> => Var::new(s);
