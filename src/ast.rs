@@ -101,6 +101,17 @@ impl<S: Clone> Expr<S> {
     }
 }
 
+#[derive(Debug)]
+pub struct Def<S> {
+    pub id: Id,
+    pub ty: Option<Expr<S>>,
+    pub term: Option<Expr<S>>,
+}
+
+pub fn def<S>(id: Id, ty: Option<Expr<S>>, term: Option<Expr<S>>) -> Def<S> {
+    Def { id, ty, term }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum USort {
     Type,

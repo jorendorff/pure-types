@@ -1,6 +1,19 @@
-use crate::ast::{self, Expr, USort, Id};
+use crate::ast::{self, Def, Expr, Id, USort};
 
 grammar;
+
+pub Def: Def<USort> = {
+    "def" <p:Id> ":" <ty:Term> ":=" <b:Term> ";" =>
+        ast::def(p, Some(ty), Some(b)),
+    "def" <p:Id> ":=" <b:Term> ";" =>
+        ast::def(p, None, Some(b)),
+    "axiom" <p:Id> ":" <ty:Term> ";" =>
+        ast::def(p, Some(ty), None),
+}
+
+pub Program: Vec<Def<USort>> = {
+    Def* => <>
+}
 
 pub Term: Expr<USort> = {
     "λ" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>

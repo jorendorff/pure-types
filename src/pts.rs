@@ -1,24 +1,42 @@
 //! Pure type system type-checking algorithm.
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 use std::rc::Rc;
 use std::{collections::HashMap, iter::FromIterator};
 
-use crate::ast::{self, Expr, ExprEnum, Id};
+use crate::ast::{self, Def, Expr, ExprEnum, Id};
 
 pub struct PureTypeSystem<S> {
     pub axioms: HashMap<S, S>,
     pub rules: HashMap<(S, S), S>,
 }
 
+#[derive(Debug, PartialEq)]
 struct EnvCons<S> {
     id: Id,
     term: Expr<S>,
     tail: Env<S>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Env<S>(Option<Rc<EnvCons<S>>>);
+
+impl<'a, S> Iterator for &'a Env<S> {
+    type Item = (&'a Id, &'a Expr<S>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let cons = self.0.as_ref()?;
+        let entry = (&cons.id, &cons.term);
+        *self = &cons.tail;
+        Some(entry)
+    }
+}
+
+impl<S: Debug> Debug for Env<S> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_list().entries(self).finish()
+    }
+}
 
 impl<S> Env<S> {
     #[allow(clippy::new_without_default)]
@@ -123,15 +141,39 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
             }
         }
     }
+
+    pub fn typeck_program(&self, env: &Env<S>, program: Vec<Def<S>>) -> Env<S> {
+        let mut env = env.clone();
+        for def in program {
+            let ty = if let Some(defined_ty) = def.ty {
+                // There's a defined type; type-check to make sure it's not nonsense.
+                self.typeck(&env, &defined_ty);
+
+                if let Some(term) = def.term {
+                    let actual_ty = self.typeck(&env, &term);
+                    assert_eq!(actual_ty, defined_ty); // unify
+                }
+                defined_ty
+            } else {
+                let term = def.term.expect("def must have a term or type");
+                self.typeck(&env, &term)
+            };
+            env.push(def.id, ty);
+        }
+        env
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::Context;
 
+    #[cfg(test)]
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::ast::*;
-    use crate::parser::TermParser;
+    use crate::parser::{ProgramParser, TermParser};
     use USort::*;
 
     fn system_u() -> PureTypeSystem<USort> {
@@ -161,6 +203,13 @@ mod tests {
 
     fn parse(s: &'static str) -> Expr<USort> {
         TermParser::new().parse(s).context("parse error").unwrap()
+    }
+
+    fn parse_program(s: &'static str) -> Vec<Def<USort>> {
+        ProgramParser::new()
+            .parse(s)
+            .context("parse error")
+            .unwrap()
     }
 
     #[test]
@@ -213,5 +262,49 @@ mod tests {
                 )
             )
         );
+    }
+
+    #[test]
+    fn test_program_parser() {
+        let u = system_u();
+        let base_env = u_env();
+        let result = u.typeck_program(
+            &base_env,
+            parse_program(
+                "
+                axiom true : Type;
+                axiom trivial : true;
+                def tx : Π (p : Type) . p -> true := λ (p : Type) . λ (_ : p) . trivial;
+                axiom false : Type;
+                axiom ffs : Π (p : Type) . false -> p;
+                ",
+            ),
+        );
+
+        let actual_env = result
+            .into_iter()
+            .map(|(id, ty)| (id.clone(), ty.clone()))
+            .collect::<BTreeMap<Id, Expr<USort>>>();
+
+        use std::collections::BTreeMap;
+        let expected_env = base_env
+            .into_iter()
+            .map(|(a, b)| (a.clone(), b.clone()))
+            .chain(vec![
+                (Id::from("true"), sort(Type)),
+                (Id::from("trivial"), var("true")),
+                (
+                    Id::from("ffs"),
+                    pi("p", sort(Type), arrow(var("false"), var("p"))),
+                ),
+                (Id::from("false"), sort(Type)),
+                (
+                    Id::from("tx"),
+                    pi("p", sort(Type), arrow(var("p"), var("true"))),
+                ),
+            ])
+            .collect::<BTreeMap<Id, Expr<USort>>>();
+
+        assert_eq!(actual_env, expected_env);
     }
 }
