@@ -1,8 +1,10 @@
 //! Pure type system type-checking algorithm.
+
 use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
-use std::rc::Rc;
 use std::{collections::HashMap, iter::FromIterator};
+
+use rpds::HashTrieMap;
 
 use crate::ast::{self, Def, Expr, ExprEnum, Id};
 
@@ -11,68 +13,37 @@ pub struct PureTypeSystem<S> {
     pub rules: HashMap<(S, S), S>,
 }
 
-#[derive(Debug, PartialEq)]
-struct EnvCons<S> {
-    id: Id,
-    term: Expr<S>,
-    tail: Env<S>,
-}
-
 #[derive(Clone, PartialEq)]
-pub struct Env<S>(Option<Rc<EnvCons<S>>>);
-
-impl<'a, S> Iterator for &'a Env<S> {
-    type Item = (&'a Id, &'a Expr<S>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let cons = self.0.as_ref()?;
-        let entry = (&cons.id, &cons.term);
-        *self = &cons.tail;
-        Some(entry)
-    }
-}
+pub struct Env<S>(HashTrieMap<Id, Expr<S>>);
 
 impl<S: Debug> Debug for Env<S> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_list().entries(self).finish()
+        f.debug_list().entries(&self.0).finish()
     }
 }
 
 impl<S> Env<S> {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Env(None)
+        Env(HashTrieMap::new())
     }
 
     pub fn get(&self, x: &Id) -> Option<&Expr<S>> {
-        let mut current = self;
-        while let Env(Some(cell)) = current {
-            if cell.id == *x {
-                return Some(&cell.term);
-            }
-            current = &cell.tail;
-        }
-        None
+        self.0.get(x)
     }
 
-    pub fn cons(id: Id, term: Expr<S>, tail: Env<S>) -> Env<S> {
-        Env(Some(Rc::new(EnvCons { id, term, tail })))
+    pub fn with(&self, id: Id, term: Expr<S>) -> Env<S> {
+        Env(self.0.insert(id, term))
     }
 
     pub fn push(&mut self, id: Id, term: Expr<S>) {
-        let mut tmp = Env(None);
-        std::mem::swap(&mut tmp, self);
-        *self = Self::cons(id, term, tmp);
+        self.0 = self.0.insert(id, term);
     }
 }
 
 impl<S> FromIterator<(Id, Expr<S>)> for Env<S> {
     fn from_iter<T: IntoIterator<Item = (Id, Expr<S>)>>(iter: T) -> Self {
-        let mut env = Env(None);
-        for (id, term) in iter {
-            env.push(id, term);
-        }
-        env
+        Env(iter.into_iter().collect())
     }
 }
 
@@ -104,8 +75,8 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
                         expr, x_ty
                     ),
                 };
-                let env2 = Env::cons(x.clone(), x_ty.clone(), env.clone());
-                let body_sort = match self.typeck(&env2, body_ty).inner() {
+                let body_ty_ty = self.typeck(&env.with(x.clone(), x_ty.clone()), body_ty);
+                let body_sort = match body_ty_ty.inner() {
                     ExprEnum::ConstSort(s) => s.clone(),
                     _ => panic!(
                         "invalid type: {:?} (because the type of {:?} is not a sort)",
@@ -134,7 +105,7 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
                 }
             }
             ExprEnum::Lambda(p, p_ty, body) => {
-                let body_ty = self.typeck(&Env::cons(p.clone(), p_ty.clone(), env.clone()), body);
+                let body_ty = self.typeck(&env.with(p.clone(), p_ty.clone()), body);
                 let product_ty = ast::pi(p.clone(), p_ty.clone(), body_ty);
                 let _product_ty_ty = self.typeck(env, &product_ty);
                 product_ty
@@ -218,7 +189,7 @@ mod tests {
 
         // λ (t : *), λ (x : t), x
         let id_expr = lambda("t", sort(Type), lambda("x", var("t"), var("x")));
-        let id_type = u.typeck(&Env(None), &id_expr);
+        let id_type = u.typeck(&Env::new(), &id_expr);
         println!("The type of `{}` is `{}`", id_expr, id_type);
 
         // Π (t : *), Π (x : t), t
@@ -268,7 +239,7 @@ mod tests {
     fn test_program_parser() {
         let u = system_u();
         let base_env = u_env();
-        let result = u.typeck_program(
+        let actual_env = u.typeck_program(
             &base_env,
             parse_program(
                 "
@@ -281,29 +252,18 @@ mod tests {
             ),
         );
 
-        let actual_env = result
-            .into_iter()
-            .map(|(id, ty)| (id.clone(), ty.clone()))
-            .collect::<BTreeMap<Id, Expr<USort>>>();
-
-        use std::collections::BTreeMap;
-        let expected_env = base_env
-            .into_iter()
-            .map(|(a, b)| (a.clone(), b.clone()))
-            .chain(vec![
-                (Id::from("true"), sort(Type)),
-                (Id::from("trivial"), var("true")),
-                (
-                    Id::from("ffs"),
-                    pi("p", sort(Type), arrow(var("false"), var("p"))),
-                ),
-                (Id::from("false"), sort(Type)),
-                (
-                    Id::from("tx"),
-                    pi("p", sort(Type), arrow(var("p"), var("true"))),
-                ),
-            ])
-            .collect::<BTreeMap<Id, Expr<USort>>>();
+        let mut expected_env = base_env;
+        expected_env.push(Id::from("true"), sort(Type));
+        expected_env.push(Id::from("trivial"), var("true"));
+        expected_env.push(
+            Id::from("ffs"),
+            pi("p", sort(Type), arrow(var("false"), var("p"))),
+        );
+        expected_env.push(Id::from("false"), sort(Type));
+        expected_env.push(
+            Id::from("tx"),
+            pi("p", sort(Type), arrow(var("p"), var("true"))),
+        );
 
         assert_eq!(actual_env, expected_env);
     }
