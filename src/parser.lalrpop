@@ -1,14 +1,12 @@
-use std::rc::Rc;
-
-use crate::ast::{Expr, USort, Id};
+use crate::ast::{self, Expr, USort, Id};
 
 grammar;
 
 pub Term: Expr<USort> = {
     "λ" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>
-        Expr::Lambda(p, Rc::new(ty), Rc::new(b)),
+        ast::lambda(p, ty, b),
     "Π" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>
-        Expr::Product(p, Rc::new(ty), Rc::new(b)),
+        ast::pi(p, ty, b),
     <e:Op> =>
         e,
 }
@@ -17,27 +15,27 @@ Op: Expr<USort> = {
     <e:Call> =>
         e,
     <left:Call> "->" <right:Op> =>
-        Expr::Product(Id::from("_"), Rc::new(left), Rc::new(right)),
+        ast::arrow(left, right),
 }
 
 Call: Expr<USort> = {
     <p:Prim> =>
         p,
     <f:Call> <a:Prim> =>
-        Expr::Apply(Rc::new(f), Rc::new(a)),
+        ast::apply(f, a),
 }
 
 Prim: Expr<USort> = {
     "(" <t:Term> ")" =>
         t,
     <v:Id> =>
-        Expr::Var(v),
+        ast::var(v),
     "Type" =>
-        Expr::ConstSort(USort::Type),
+        ast::sort(USort::Type),
     "Kind" =>
-        Expr::ConstSort(USort::Kind),
+        ast::sort(USort::Kind),
     "Triangle" =>
-        Expr::ConstSort(USort::Triangle),
+        ast::sort(USort::Triangle),
 }
 
 Id: Id = <s:r"\w+"> => Id::from(s);

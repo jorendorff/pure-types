@@ -1,85 +1,100 @@
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::rc::Rc;
 
 pub type Id = string_cache::DefaultAtom;
 
-#[derive(Clone, PartialEq, Debug)]
-pub enum Expr<S> {
-    ConstSort(S),
-    Var(Id),
-    Product(Id, Rc<Expr<S>>, Rc<Expr<S>>),
-    Apply(Rc<Expr<S>>, Rc<Expr<S>>),
-    Lambda(Id, Rc<Expr<S>>, Rc<Expr<S>>),
+#[derive(Clone, PartialEq)]
+pub struct Expr<S>(pub(crate) Rc<ExprEnum<S>>);
+
+pub fn var<S>(x: impl Into<Id>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Var(x.into())))
+}
+
+pub fn apply<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Apply(f, a)))
+}
+
+pub fn lambda<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Lambda(p.into(), ty, b)))
+}
+
+pub fn pi<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Pi(p.into(), ty, b)))
+}
+
+pub fn arrow<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Pi(Id::from("_"), f, a)))
+}
+
+pub fn sort<S>(s: S) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::ConstSort(s)))
 }
 
 impl<S: Display> Display for Expr<S> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        <ExprEnum<S> as Display>::fmt(&self.0, f)
+    }
+}
+
+impl<S: Debug> Debug for Expr<S> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        <ExprEnum<S> as Debug>::fmt(&self.0, f)
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum ExprEnum<S> {
+    ConstSort(S),
+    Var(Id),
+    Pi(Id, Expr<S>, Expr<S>),
+    Apply(Expr<S>, Expr<S>),
+    Lambda(Id, Expr<S>, Expr<S>),
+}
+
+impl<S: Display> Display for ExprEnum<S> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         match self {
-            Expr::ConstSort(s) => write!(f, "{}", *s),
-            Expr::Var(v) => write!(f, "{}", v),
-            Expr::Product(p, p_ty, body) => write!(f, "Π ({} : {}) . {}", p, p_ty, body),
-            Expr::Apply(fun, arg) => write!(f, "({})({})", fun, arg),
-            Expr::Lambda(p, p_ty, body) => write!(f, "λ ({} : {}) . {}", p, p_ty, body),
+            ExprEnum::ConstSort(s) => write!(f, "{}", *s),
+            ExprEnum::Var(v) => write!(f, "{}", v),
+            ExprEnum::Pi(p, p_ty, body) => write!(f, "Π ({} : {}) . {}", p, p_ty, body),
+            ExprEnum::Apply(fun, arg) => write!(f, "({})({})", fun, arg),
+            ExprEnum::Lambda(p, p_ty, body) => write!(f, "λ ({} : {}) . {}", p, p_ty, body),
         }
     }
 }
 
 impl<S: Clone> Expr<S> {
-    pub fn subst(&self, x: &Id, y: &Rc<Expr<S>>) -> Rc<Expr<S>> {
-        match self {
-            Expr::ConstSort(s) => Rc::new(Expr::ConstSort(s.clone())),
-            Expr::Var(v) => {
+    pub fn subst(&self, x: &Id, y: &Expr<S>) -> Expr<S> {
+        match &self.0 as &ExprEnum<S> {
+            ExprEnum::ConstSort(s) => sort(s.clone()),
+            ExprEnum::Var(v) => {
                 if *v == *x {
-                    Rc::clone(y)
+                    y.clone()
                 } else {
-                    Rc::new(Expr::Var(v.clone()))
+                    self.clone()
                 }
             }
-            Expr::Product(v, v_ty, body) => Rc::new(Expr::Product(
+            ExprEnum::Pi(v, v_ty, body) => pi(
                 v.clone(),
                 v_ty.subst(x, y),
                 if *v == *x {
-                    Rc::clone(body)
+                    body.clone()
                 } else {
                     body.subst(x, y)
                 },
-            )),
-            Expr::Apply(f, arg) => Rc::new(Expr::Apply(f.subst(x, y), arg.subst(x, y))),
-            Expr::Lambda(v, v_ty, body) => Rc::new(Expr::Lambda(
+            ),
+            ExprEnum::Apply(f, arg) => apply(f.subst(x, y), arg.subst(x, y)),
+            ExprEnum::Lambda(v, v_ty, body) => lambda(
                 v.clone(),
                 v_ty.subst(x, y),
                 if *v == *x {
-                    Rc::clone(body)
+                    body.clone()
                 } else {
                     body.subst(x, y)
                 },
-            )),
+            ),
         }
     }
-}
-
-pub fn var<S>(x: &str) -> Rc<Expr<S>> {
-    Rc::new(Expr::Var(Id::from(x)))
-}
-
-pub fn apply<S>(f: Rc<Expr<S>>, a: Rc<Expr<S>>) -> Rc<Expr<S>> {
-    Rc::new(Expr::Apply(f, a))
-}
-
-pub fn lambda<S>(p: &str, ty: Rc<Expr<S>>, b: Rc<Expr<S>>) -> Rc<Expr<S>> {
-    Rc::new(Expr::Lambda(Id::from(p), ty, b))
-}
-
-pub fn pi<S>(p: &str, ty: Rc<Expr<S>>, b: Rc<Expr<S>>) -> Rc<Expr<S>> {
-    Rc::new(Expr::Product(Id::from(p), ty, b))
-}
-
-pub fn arrow<S>(f: Rc<Expr<S>>, a: Rc<Expr<S>>) -> Rc<Expr<S>> {
-    Rc::new(Expr::Product(Id::from("_"), f, a))
-}
-
-pub fn sort<S>(s: S) -> Rc<Expr<S>> {
-    Rc::new(Expr::ConstSort(s))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
