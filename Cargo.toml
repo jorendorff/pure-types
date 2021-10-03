@@ -1,0 +1,20 @@
+[package]
+name = "pure-types"
+version = "0.1.0"
+edition = "2018"
+build = "build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0"
+lalrpop-util = "0.19.6"
+regex = "1"
+string_cache = "0.8"
+rpds = "0.10.0"
+
+[build-dependencies]
+lalrpop = "0.19.6"
+
+[dev-dependencies]
+pretty_assertions = "0.6.1"
