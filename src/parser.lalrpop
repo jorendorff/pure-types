@@ -1,11 +1,11 @@
-use crate::ast::{Expr, USort, Var};
+use crate::ast::{Expr, USort, Id};
 
 grammar;
 
 pub Term: Expr<USort> = {
-    "λ" "(" <p:Var> ":" <ty:Term> ")" "." <b:Term> =>
+    "λ" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>
         Expr::Lambda(p, Box::new(ty), Box::new(b)),
-    "Π" "(" <p:Var> ":" <ty:Term> ")" "." <b:Term> =>
+    "Π" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>
         Expr::Product(p, Box::new(ty), Box::new(b)),
     <e:Op> =>
         e,
@@ -15,7 +15,7 @@ Op: Expr<USort> = {
     <e:Call> =>
         e,
     <left:Call> "->" <right:Op> =>
-        Expr::Product(Var::new("_"), Box::new(left), Box::new(right)),
+        Expr::Product(Id::from("_"), Box::new(left), Box::new(right)),
 }
 
 Call: Expr<USort> = {
@@ -28,7 +28,7 @@ Call: Expr<USort> = {
 Prim: Expr<USort> = {
     "(" <t:Term> ")" =>
         t,
-    <v:Var> =>
+    <v:Id> =>
         Expr::Var(v),
     "Type" =>
         Expr::ConstSort(USort::Type),
@@ -38,4 +38,4 @@ Prim: Expr<USort> = {
         Expr::ConstSort(USort::Triangle),
 }
 
-Var: Var = <s:r"\w+"> => Var::new(s);
+Id: Id = <s:r"\w+"> => Id::from(s);
