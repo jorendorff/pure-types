@@ -60,7 +60,7 @@ impl<S> FromIterator<(Id, Expr<S>)> for Env<S> {
 
 impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
     pub fn typeck(&self, env: &Env<S>, expr: &Expr<S>) -> Expr<S> {
-        match &expr.0 as &ExprEnum<S> {
+        match expr.inner() {
             ExprEnum::ConstSort(s) => {
                 if let Some(meta) = self.axioms.get(s) {
                     ast::sort(meta.clone())
@@ -79,7 +79,7 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
                 }
             }
             ExprEnum::Pi(x, x_ty, body_ty) => {
-                let x_sort = match &self.typeck(env, x_ty).0 as &ExprEnum<S> {
+                let x_sort = match self.typeck(env, x_ty).inner() {
                     ExprEnum::ConstSort(s) => s.clone(),
                     _ => panic!(
                         "invalid type: {:?} (because the type of {:?} is not a sort)",
@@ -87,7 +87,7 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
                     ),
                 };
                 let env2 = Env::cons(x.clone(), x_ty.clone(), env.clone());
-                let body_sort = match &self.typeck(&env2, body_ty).0 as &ExprEnum<S> {
+                let body_sort = match self.typeck(&env2, body_ty).inner() {
                     ExprEnum::ConstSort(s) => s.clone(),
                     _ => panic!(
                         "invalid type: {:?} (because the type of {:?} is not a sort)",

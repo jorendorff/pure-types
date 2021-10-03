@@ -64,8 +64,12 @@ impl<S: Display> Display for ExprEnum<S> {
 }
 
 impl<S: Clone> Expr<S> {
+    pub(crate) fn inner(&self) -> &ExprEnum<S> {
+        &self.0
+    }
+
     pub fn subst(&self, x: &Id, y: &Expr<S>) -> Expr<S> {
-        match &self.0 as &ExprEnum<S> {
+        match self.inner() {
             ExprEnum::ConstSort(s) => sort(s.clone()),
             ExprEnum::Var(v) => {
                 if *v == *x {
