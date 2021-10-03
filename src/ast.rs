@@ -1,4 +1,5 @@
 use std::fmt::{self, Display, Formatter};
+use std::rc::Rc;
 
 pub type Id = string_cache::DefaultAtom;
 
@@ -6,9 +7,9 @@ pub type Id = string_cache::DefaultAtom;
 pub enum Expr<S> {
     ConstSort(S),
     Var(Id),
-    Product(Id, Box<Expr<S>>, Box<Expr<S>>),
-    Apply(Box<Expr<S>>, Box<Expr<S>>),
-    Lambda(Id, Box<Expr<S>>, Box<Expr<S>>),
+    Product(Id, Rc<Expr<S>>, Rc<Expr<S>>),
+    Apply(Rc<Expr<S>>, Rc<Expr<S>>),
+    Lambda(Id, Rc<Expr<S>>, Rc<Expr<S>>),
 }
 
 impl<S: Display> Display for Expr<S> {
@@ -24,53 +25,61 @@ impl<S: Display> Display for Expr<S> {
 }
 
 impl<S: Clone> Expr<S> {
-    pub fn subst(self, x: &Id, y: &Expr<S>) -> Box<Expr<S>> {
+    pub fn subst(&self, x: &Id, y: &Rc<Expr<S>>) -> Rc<Expr<S>> {
         match self {
-            Expr::ConstSort(s) => Box::new(Expr::ConstSort(s)),
+            Expr::ConstSort(s) => Rc::new(Expr::ConstSort(s.clone())),
             Expr::Var(v) => {
-                if v == *x {
-                    Box::new(y.clone())
+                if *v == *x {
+                    Rc::clone(y)
                 } else {
-                    Box::new(Expr::Var(v))
+                    Rc::new(Expr::Var(v.clone()))
                 }
             }
-            Expr::Product(v, v_ty, body) => Box::new(Expr::Product(
+            Expr::Product(v, v_ty, body) => Rc::new(Expr::Product(
                 v.clone(),
                 v_ty.subst(x, y),
-                if v == *x { body } else { body.subst(x, y) },
+                if *v == *x {
+                    Rc::clone(body)
+                } else {
+                    body.subst(x, y)
+                },
             )),
-            Expr::Apply(f, arg) => Box::new(Expr::Apply(f.subst(x, y), arg.subst(x, y))),
-            Expr::Lambda(v, v_ty, body) => Box::new(Expr::Lambda(
+            Expr::Apply(f, arg) => Rc::new(Expr::Apply(f.subst(x, y), arg.subst(x, y))),
+            Expr::Lambda(v, v_ty, body) => Rc::new(Expr::Lambda(
                 v.clone(),
                 v_ty.subst(x, y),
-                if v == *x { body } else { body.subst(x, y) },
+                if *v == *x {
+                    Rc::clone(body)
+                } else {
+                    body.subst(x, y)
+                },
             )),
         }
     }
 }
 
-pub fn var<S>(x: &str) -> Box<Expr<S>> {
-    Box::new(Expr::Var(Id::from(x)))
+pub fn var<S>(x: &str) -> Rc<Expr<S>> {
+    Rc::new(Expr::Var(Id::from(x)))
 }
 
-pub fn apply<S>(f: Box<Expr<S>>, a: Box<Expr<S>>) -> Box<Expr<S>> {
-    Box::new(Expr::Apply(f, a))
+pub fn apply<S>(f: Rc<Expr<S>>, a: Rc<Expr<S>>) -> Rc<Expr<S>> {
+    Rc::new(Expr::Apply(f, a))
 }
 
-pub fn lambda<S>(p: &str, ty: Box<Expr<S>>, b: Box<Expr<S>>) -> Box<Expr<S>> {
-    Box::new(Expr::Lambda(Id::from(p), ty, b))
+pub fn lambda<S>(p: &str, ty: Rc<Expr<S>>, b: Rc<Expr<S>>) -> Rc<Expr<S>> {
+    Rc::new(Expr::Lambda(Id::from(p), ty, b))
 }
 
-pub fn pi<S>(p: &str, ty: Box<Expr<S>>, b: Box<Expr<S>>) -> Box<Expr<S>> {
-    Box::new(Expr::Product(Id::from(p), ty, b))
+pub fn pi<S>(p: &str, ty: Rc<Expr<S>>, b: Rc<Expr<S>>) -> Rc<Expr<S>> {
+    Rc::new(Expr::Product(Id::from(p), ty, b))
 }
 
-pub fn arrow<S>(f: Box<Expr<S>>, a: Box<Expr<S>>) -> Box<Expr<S>> {
-    Box::new(Expr::Product(Id::from("_"), f, a))
+pub fn arrow<S>(f: Rc<Expr<S>>, a: Rc<Expr<S>>) -> Rc<Expr<S>> {
+    Rc::new(Expr::Product(Id::from("_"), f, a))
 }
 
-pub fn sort<S>(s: S) -> Box<Expr<S>> {
-    Box::new(Expr::ConstSort(s))
+pub fn sort<S>(s: S) -> Rc<Expr<S>> {
+    Rc::new(Expr::ConstSort(s))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]

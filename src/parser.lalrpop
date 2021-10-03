@@ -1,12 +1,14 @@
+use std::rc::Rc;
+
 use crate::ast::{Expr, USort, Id};
 
 grammar;
 
 pub Term: Expr<USort> = {
     "λ" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>
-        Expr::Lambda(p, Box::new(ty), Box::new(b)),
+        Expr::Lambda(p, Rc::new(ty), Rc::new(b)),
     "Π" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>
-        Expr::Product(p, Box::new(ty), Box::new(b)),
+        Expr::Product(p, Rc::new(ty), Rc::new(b)),
     <e:Op> =>
         e,
 }
@@ -15,14 +17,14 @@ Op: Expr<USort> = {
     <e:Call> =>
         e,
     <left:Call> "->" <right:Op> =>
-        Expr::Product(Id::from("_"), Box::new(left), Box::new(right)),
+        Expr::Product(Id::from("_"), Rc::new(left), Rc::new(right)),
 }
 
 Call: Expr<USort> = {
     <p:Prim> =>
         p,
     <f:Call> <a:Prim> =>
-        Expr::Apply(Box::new(f), Box::new(a)),
+        Expr::Apply(Rc::new(f), Rc::new(a)),
 }
 
 Prim: Expr<USort> = {

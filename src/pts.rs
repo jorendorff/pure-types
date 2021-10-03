@@ -13,7 +13,7 @@ pub struct PureTypeSystem<S> {
 
 struct EnvCons<S> {
     id: Id,
-    term: Box<Expr<S>>,
+    term: Rc<Expr<S>>,
     tail: Env<S>,
 }
 
@@ -37,11 +37,11 @@ impl<S> Env<S> {
         None
     }
 
-    pub fn cons(id: Id, term: Box<Expr<S>>, tail: Env<S>) -> Env<S> {
+    pub fn cons(id: Id, term: Rc<Expr<S>>, tail: Env<S>) -> Env<S> {
         Env(Some(Rc::new(EnvCons { id, term, tail })))
     }
 
-    pub fn push(&mut self, id: Id, term: Box<Expr<S>>) {
+    pub fn push(&mut self, id: Id, term: Rc<Expr<S>>) {
         let mut tmp = Env(None);
         std::mem::swap(&mut tmp, self);
         *self = Self::cons(id, term, tmp);
@@ -52,14 +52,14 @@ impl<S> FromIterator<(Id, Expr<S>)> for Env<S> {
     fn from_iter<T: IntoIterator<Item = (Id, Expr<S>)>>(iter: T) -> Self {
         let mut env = Env(None);
         for (id, term) in iter {
-            env.push(id, Box::new(term));
+            env.push(id, Rc::new(term));
         }
         env
     }
 }
 
 impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
-    pub fn typeck(&self, env: &Env<S>, expr: &Expr<S>) -> Box<Expr<S>> {
+    pub fn typeck(&self, env: &Env<S>, expr: &Expr<S>) -> Rc<Expr<S>> {
         match expr {
             Expr::ConstSort(s) => {
                 if let Some(meta) = self.axioms.get(s) {
@@ -73,22 +73,22 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
             }
             Expr::Var(v) => {
                 if let Some(v_ty) = env.get(v) {
-                    Box::new(v_ty.clone())
+                    Rc::new(v_ty.clone())
                 } else {
                     panic!("can't find value `{:?}` in this scope", *v);
                 }
             }
             Expr::Product(x, x_ty, body_ty) => {
-                let x_sort = match *self.typeck(env, x_ty) {
-                    Expr::ConstSort(s) => s,
+                let x_sort = match &*self.typeck(env, x_ty) {
+                    Expr::ConstSort(s) => s.clone(),
                     _ => panic!(
                         "invalid type: {:?} (because the type of {:?} is not a sort)",
                         expr, x_ty
                     ),
                 };
                 let env2 = Env::cons(x.clone(), x_ty.clone(), env.clone());
-                let body_sort = match *self.typeck(&env2, body_ty) {
-                    Expr::ConstSort(s) => s,
+                let body_sort = match &*self.typeck(&env2, body_ty) {
+                    Expr::ConstSort(s) => s.clone(),
                     _ => panic!(
                         "invalid type: {:?} (because the type of {:?} is not a sort)",
                         expr, body_ty
@@ -104,11 +104,11 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
                 }
             }
             Expr::Apply(f, arg) => {
-                if let Expr::Product(x, expected_arg_ty, body_ty_expr) = *self.typeck(env, f) {
-                    let actual_arg_ty: Box<Expr<S>> = self.typeck(env, arg);
-                    let expected_arg_ty: Box<Expr<S>> = expected_arg_ty;
+                if let Expr::Product(x, expected_arg_ty, body_ty_expr) = &*self.typeck(env, f) {
+                    let actual_arg_ty: Rc<Expr<S>> = self.typeck(env, arg);
+                    let expected_arg_ty: Rc<Expr<S>> = Rc::clone(expected_arg_ty);
                     assert_eq!(actual_arg_ty, expected_arg_ty); // unify
-                    body_ty_expr.subst(&x, &actual_arg_ty)
+                    body_ty_expr.subst(x, &actual_arg_ty)
                 } else {
                     panic!("function expected; got {:?}", f);
                 }
@@ -117,7 +117,7 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
                 let body_ty = self.typeck(&Env::cons(p.clone(), p_ty.clone(), env.clone()), body);
                 let product_ty = Expr::Product(p.clone(), p_ty.clone(), body_ty);
                 let _product_ty_ty = self.typeck(env, &product_ty);
-                Box::new(product_ty)
+                Rc::new(product_ty)
             }
         }
     }
@@ -157,8 +157,8 @@ mod tests {
         .collect()
     }
 
-    fn parse(s: &'static str) -> Box<Expr<USort>> {
-        Box::new(TermParser::new().parse(s).context("parse error").unwrap())
+    fn parse(s: &'static str) -> Rc<Expr<USort>> {
+        Rc::new(TermParser::new().parse(s).context("parse error").unwrap())
     }
 
     #[test]
