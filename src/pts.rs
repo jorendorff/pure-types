@@ -1,6 +1,6 @@
 //! Pure type system type-checking algorithm.
 
-use std::fmt::{self, Debug, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::Hash;
 use std::{collections::HashMap, iter::FromIterator};
 
@@ -47,90 +47,134 @@ impl<S> FromIterator<(Id, Expr<S>)> for Env<S> {
     }
 }
 
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum TypeCheckError<S> {
+    #[error("`{0:?}` can't be used as an expression in code; it has no type")]
+    UntypedSort(S),
+
+    #[error("can't find value {0:?} in this scope")]
+    UndeclaredVar(Id),
+
+    #[error("invalid function type `{0}`: the type of the argument type `{1}` is not a sort")]
+    InvalidPiParameterType(Expr<S>, Expr<S>),
+
+    #[error("invalid function type `{0}`: the type of the return type `{1}` is not a sort")]
+    InvalidPiReturnType(Expr<S>, Expr<S>),
+
+    #[error(
+        "invalid function type `{0}`: the argument type is a {1:?} and the return type is a {2:?}"
+    )]
+    InvalidPiSorts(Expr<S>, S, S),
+
+    #[error("type error in function call `{0}`: function expected, type of `{1}` is `{2}`")]
+    FunctionExpected(Expr<S>, Expr<S>, Expr<S>),
+
+    #[error("argument is the wrong type in `{0}`: expected `{1}`, got `{2}`")]
+    ArgumentTypeMismatch(Expr<S>, Expr<S>, Expr<S>),
+}
+
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
-    pub fn typeck(&self, env: &Env<S>, expr: &Expr<S>) -> Expr<S> {
-        match expr.inner() {
+    pub fn typeck(&self, env: &Env<S>, expr: &Expr<S>) -> Result<Expr<S>, TypeCheckError<S>> {
+        Ok(match expr.inner() {
             ExprEnum::ConstSort(s) => {
                 if let Some(meta) = self.axioms.get(s) {
                     ast::sort(meta.clone())
                 } else {
-                    panic!(
-                        "{:?} can't be used as an expression in code; it has no type",
-                        expr
-                    );
+                    return Err(TypeCheckError::UntypedSort(s.clone()));
                 }
             }
             ExprEnum::Var(v) => {
                 if let Some(v_ty) = env.get(v) {
                     v_ty.clone()
                 } else {
-                    panic!("can't find value `{:?}` in this scope", *v);
+                    return Err(TypeCheckError::UndeclaredVar(v.clone()));
                 }
             }
             ExprEnum::Pi(x, x_ty, body_ty) => {
-                let x_sort = match self.typeck(env, x_ty).inner() {
+                let x_sort = match self.typeck(env, x_ty)?.inner() {
                     ExprEnum::ConstSort(s) => s.clone(),
-                    _ => panic!(
-                        "invalid type: {:?} (because the type of {:?} is not a sort)",
-                        expr, x_ty
-                    ),
+                    _ => {
+                        return Err(TypeCheckError::InvalidPiParameterType(
+                            expr.clone(),
+                            x_ty.clone(),
+                        ))
+                    }
                 };
-                let body_ty_ty = self.typeck(&env.with(x.clone(), x_ty.clone()), body_ty);
+                let body_ty_ty = self.typeck(&env.with(x.clone(), x_ty.clone()), body_ty)?;
                 let body_sort = match body_ty_ty.inner() {
                     ExprEnum::ConstSort(s) => s.clone(),
-                    _ => panic!(
-                        "invalid type: {:?} (because the type of {:?} is not a sort)",
-                        expr, body_ty
-                    ),
+                    _ => {
+                        return Err(TypeCheckError::InvalidPiReturnType(
+                            expr.clone(),
+                            body_ty.clone(),
+                        ))
+                    }
                 };
                 if let Some(s) = self.rules.get(&(x_sort.clone(), body_sort.clone())) {
                     ast::sort(s.clone())
                 } else {
-                    panic!(
-                        "invalid type: {:?} (because {:?} is a {:?} and {:?} is a {:?})",
-                        expr, x_ty, x_sort, body_ty, body_sort
-                    );
+                    return Err(TypeCheckError::InvalidPiSorts(
+                        expr.clone(),
+                        x_sort,
+                        body_sort,
+                    ));
                 }
             }
             ExprEnum::Apply(f, arg) => {
-                let f_ty = self.typeck(env, f);
+                let f_ty = self.typeck(env, f)?;
                 if let ExprEnum::Pi(x, expected_arg_ty, body_ty_expr) = f_ty.inner() {
-                    let actual_arg_ty: Expr<S> = self.typeck(env, arg);
+                    let actual_arg_ty: Expr<S> = self.typeck(env, arg)?;
                     let expected_arg_ty: Expr<S> = expected_arg_ty.clone();
-                    assert_eq!(actual_arg_ty, expected_arg_ty); // unify
+                    if actual_arg_ty != expected_arg_ty {
+                        return Err(TypeCheckError::ArgumentTypeMismatch(
+                            expr.clone(),
+                            expected_arg_ty,
+                            actual_arg_ty,
+                        ));
+                    }
                     body_ty_expr.subst(x, &actual_arg_ty)
                 } else {
-                    panic!("function expected; got `{} : {}`", f, f_ty);
+                    return Err(TypeCheckError::FunctionExpected(
+                        expr.clone(),
+                        f.clone(),
+                        f_ty,
+                    ));
                 }
             }
             ExprEnum::Lambda(p, p_ty, body) => {
-                let body_ty = self.typeck(&env.with(p.clone(), p_ty.clone()), body);
+                let body_ty = self.typeck(&env.with(p.clone(), p_ty.clone()), body)?;
                 let product_ty = ast::pi(p.clone(), p_ty.clone(), body_ty);
-                let _product_ty_ty = self.typeck(env, &product_ty);
+                let _product_ty_ty = self.typeck(env, &product_ty)?;
                 product_ty
             }
-        }
+        })
     }
 
-    pub fn typeck_program(&self, env: &Env<S>, program: Vec<Def<S>>) -> Env<S> {
+    pub fn typeck_program(
+        &self,
+        env: &Env<S>,
+        program: Vec<Def<S>>,
+    ) -> Result<Env<S>, TypeCheckError<S>> {
         let mut env = env.clone();
         for def in program {
             let ty = if let Some(defined_ty) = def.ty {
                 // There's a defined type; type-check to make sure it's not nonsense.
-                self.typeck(&env, &defined_ty);
+                self.typeck(&env, &defined_ty)?;
 
                 if let Some(term) = def.term {
-                    let actual_ty = self.typeck(&env, &term);
+                    let actual_ty = self.typeck(&env, &term)?;
                     assert_eq!(actual_ty, defined_ty); // unify
                 }
                 defined_ty
             } else {
                 let term = def.term.expect("def must have a term or type");
-                self.typeck(&env, &term)
+                self.typeck(&env, &term)?
             };
             env.push(def.id, ty);
         }
-        env
+        Ok(env)
     }
 }
 
@@ -188,7 +232,7 @@ mod tests {
 
         // λ (t : *), λ (x : t), x
         let id_expr = lambda("t", sort(Type), lambda("x", var("t"), var("x")));
-        let id_type = u.typeck(&Env::new(), &id_expr);
+        let id_type = u.typeck(&Env::new(), &id_expr).unwrap();
         println!("The type of `{}` is `{}`", id_expr, id_type);
 
         // Π (t : *), Π (x : t), t
@@ -201,7 +245,7 @@ mod tests {
         let ty = parse("Π (k : Kind) . Π (α : k -> k) . Π (β : k) . k");
 
         let u = system_u();
-        assert_eq!(u.typeck(&Env::new(), &expr), ty);
+        assert_eq!(u.typeck(&Env::new(), &expr).unwrap(), ty);
     }
 
     #[test]
@@ -238,18 +282,20 @@ mod tests {
     fn test_program_parser() {
         let u = system_u();
         let base_env = u_env();
-        let actual_env = u.typeck_program(
-            &base_env,
-            parse_program(
-                "
+        let actual_env = u
+            .typeck_program(
+                &base_env,
+                parse_program(
+                    "
                 axiom true : Type;
                 axiom trivial : true;
                 def tx : Π (p : Type) . p -> true := λ (p : Type) . λ (_ : p) . trivial;
                 axiom false : Type;
                 axiom ffs : Π (p : Type) . false -> p;
                 ",
-            ),
-        );
+                ),
+            )
+            .unwrap();
 
         let mut expected_env = base_env;
         expected_env.push(Id::from("true"), sort(Type));

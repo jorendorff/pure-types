@@ -10,8 +10,9 @@ build = "build.rs"
 anyhow = "1.0"
 lalrpop-util = "0.19.6"
 regex = "1"
-string_cache = "0.8"
 rpds = "0.10.0"
+string_cache = "0.8"
+thiserror = "1.0.29"
 
 [build-dependencies]
 lalrpop = "0.19.6"
