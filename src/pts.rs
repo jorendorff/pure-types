@@ -1,78 +1,19 @@
 //! Pure type system type-checking algorithm.
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::Hash;
-use std::{collections::HashMap, iter::FromIterator};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    hash::Hash,
+};
 
-use rpds::HashTrieMap;
-
-use crate::ast::{self, Def, Expr, ExprEnum, Id};
+use crate::{
+    ast::{self, Def, ExprEnum},
+    Env, Expr, Id, TypeCheckError,
+};
 
 pub struct PureTypeSystem<S> {
     pub axioms: HashMap<S, S>,
     pub rules: HashMap<(S, S), S>,
-}
-
-#[derive(Clone, PartialEq)]
-pub struct Env<S>(HashTrieMap<Id, Expr<S>>);
-
-impl<S: Debug> Debug for Env<S> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_list().entries(&self.0).finish()
-    }
-}
-
-impl<S> Env<S> {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Env(HashTrieMap::new())
-    }
-
-    pub fn get(&self, x: &Id) -> Option<&Expr<S>> {
-        self.0.get(x)
-    }
-
-    pub fn with(&self, id: Id, term: Expr<S>) -> Env<S> {
-        Env(self.0.insert(id, term))
-    }
-
-    pub fn push(&mut self, id: Id, term: Expr<S>) {
-        self.0 = self.0.insert(id, term);
-    }
-}
-
-impl<S> FromIterator<(Id, Expr<S>)> for Env<S> {
-    fn from_iter<T: IntoIterator<Item = (Id, Expr<S>)>>(iter: T) -> Self {
-        Env(iter.into_iter().collect())
-    }
-}
-
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum TypeCheckError<S> {
-    #[error("`{0:?}` can't be used as an expression in code; it has no type")]
-    UntypedSort(S),
-
-    #[error("can't find value {0:?} in this scope")]
-    UndeclaredVar(Id),
-
-    #[error("invalid function type `{0}`: the type of the argument type `{1}` is not a sort")]
-    InvalidPiParameterType(Expr<S>, Expr<S>),
-
-    #[error("invalid function type `{0}`: the type of the return type `{1}` is not a sort")]
-    InvalidPiReturnType(Expr<S>, Expr<S>),
-
-    #[error(
-        "invalid function type `{0}`: the argument type is a {1:?} and the return type is a {2:?}"
-    )]
-    InvalidPiSorts(Expr<S>, S, S),
-
-    #[error("type error in function call `{0}`: function expected, type of `{1}` is `{2}`")]
-    FunctionExpected(Expr<S>, Expr<S>, Expr<S>),
-
-    #[error("argument is the wrong type in `{0}`: expected `{1}`, got `{2}`")]
-    ArgumentTypeMismatch(Expr<S>, Expr<S>, Expr<S>),
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {

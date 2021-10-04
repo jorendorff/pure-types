@@ -1,8 +1,14 @@
-use std::fmt::{self, Debug, Display, Formatter};
-use std::rc::Rc;
+//! Abstract syntax trees.
 
+use std::{
+    fmt::{self, Debug, Display, Formatter},
+    rc::Rc,
+};
+
+/// The type of identifiers.
 pub type Id = string_cache::DefaultAtom;
 
+/// Expressions.
 #[derive(Clone, PartialEq)]
 pub struct Expr<S>(pub(crate) Rc<ExprEnum<S>>);
 
