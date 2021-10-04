@@ -47,7 +47,7 @@ impl<S> FromIterator<(Id, Expr<S>)> for Env<S> {
     }
 }
 
-impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
+impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
     pub fn typeck(&self, env: &Env<S>, expr: &Expr<S>) -> Expr<S> {
         match expr.inner() {
             ExprEnum::ConstSort(s) => {
@@ -93,15 +93,14 @@ impl<S: Clone + Debug + Hash + Eq> PureTypeSystem<S> {
                 }
             }
             ExprEnum::Apply(f, arg) => {
-                if let ExprEnum::Pi(x, expected_arg_ty, body_ty_expr) =
-                    &self.typeck(env, f).0 as &ExprEnum<S>
-                {
+                let f_ty = self.typeck(env, f);
+                if let ExprEnum::Pi(x, expected_arg_ty, body_ty_expr) = f_ty.inner() {
                     let actual_arg_ty: Expr<S> = self.typeck(env, arg);
                     let expected_arg_ty: Expr<S> = expected_arg_ty.clone();
                     assert_eq!(actual_arg_ty, expected_arg_ty); // unify
                     body_ty_expr.subst(x, &actual_arg_ty)
                 } else {
-                    panic!("function expected; got {:?}", f);
+                    panic!("function expected; got `{} : {}`", f, f_ty);
                 }
             }
             ExprEnum::Lambda(p, p_ty, body) => {
