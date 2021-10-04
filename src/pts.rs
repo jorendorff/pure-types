@@ -76,7 +76,7 @@ pub enum TypeCheckError<S> {
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
-    pub fn typeck(&self, env: &Env<S>, expr: &Expr<S>) -> Result<Expr<S>, TypeCheckError<S>> {
+    pub fn check_expr(&self, env: &Env<S>, expr: &Expr<S>) -> Result<Expr<S>, TypeCheckError<S>> {
         Ok(match expr.inner() {
             ExprEnum::ConstSort(s) => {
                 if let Some(meta) = self.axioms.get(s) {
@@ -93,7 +93,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                 }
             }
             ExprEnum::Pi(x, x_ty, body_ty) => {
-                let x_sort = match self.typeck(env, x_ty)?.inner() {
+                let x_sort = match self.check_expr(env, x_ty)?.inner() {
                     ExprEnum::ConstSort(s) => s.clone(),
                     _ => {
                         return Err(TypeCheckError::InvalidPiParameterType(
@@ -102,7 +102,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                         ))
                     }
                 };
-                let body_ty_ty = self.typeck(&env.with(x.clone(), x_ty.clone()), body_ty)?;
+                let body_ty_ty = self.check_expr(&env.with(x.clone(), x_ty.clone()), body_ty)?;
                 let body_sort = match body_ty_ty.inner() {
                     ExprEnum::ConstSort(s) => s.clone(),
                     _ => {
@@ -123,9 +123,9 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                 }
             }
             ExprEnum::Apply(f, arg) => {
-                let f_ty = self.typeck(env, f)?;
+                let f_ty = self.check_expr(env, f)?;
                 if let ExprEnum::Pi(x, expected_arg_ty, body_ty_expr) = f_ty.inner() {
-                    let actual_arg_ty: Expr<S> = self.typeck(env, arg)?;
+                    let actual_arg_ty: Expr<S> = self.check_expr(env, arg)?;
                     let expected_arg_ty: Expr<S> = expected_arg_ty.clone();
                     if actual_arg_ty != expected_arg_ty {
                         return Err(TypeCheckError::ArgumentTypeMismatch(
@@ -144,15 +144,15 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                 }
             }
             ExprEnum::Lambda(p, p_ty, body) => {
-                let body_ty = self.typeck(&env.with(p.clone(), p_ty.clone()), body)?;
+                let body_ty = self.check_expr(&env.with(p.clone(), p_ty.clone()), body)?;
                 let product_ty = ast::pi(p.clone(), p_ty.clone(), body_ty);
-                let _product_ty_ty = self.typeck(env, &product_ty)?;
+                let _product_ty_ty = self.check_expr(env, &product_ty)?;
                 product_ty
             }
         })
     }
 
-    pub fn typeck_program(
+    pub fn check_program(
         &self,
         env: &Env<S>,
         program: Vec<Def<S>>,
@@ -161,16 +161,16 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         for def in program {
             let ty = if let Some(defined_ty) = def.ty {
                 // There's a defined type; type-check to make sure it's not nonsense.
-                self.typeck(&env, &defined_ty)?;
+                self.check_expr(&env, &defined_ty)?;
 
                 if let Some(term) = def.term {
-                    let actual_ty = self.typeck(&env, &term)?;
+                    let actual_ty = self.check_expr(&env, &term)?;
                     assert_eq!(actual_ty, defined_ty); // unify
                 }
                 defined_ty
             } else {
                 let term = def.term.expect("def must have a term or type");
-                self.typeck(&env, &term)?
+                self.check_expr(&env, &term)?
             };
             env.push(def.id, ty);
         }
@@ -232,7 +232,7 @@ mod tests {
 
         // λ (t : *), λ (x : t), x
         let id_expr = lambda("t", sort(Type), lambda("x", var("t"), var("x")));
-        let id_type = u.typeck(&Env::new(), &id_expr).unwrap();
+        let id_type = u.check_expr(&Env::new(), &id_expr).unwrap();
         println!("The type of `{}` is `{}`", id_expr, id_type);
 
         // Π (t : *), Π (x : t), t
@@ -245,7 +245,7 @@ mod tests {
         let ty = parse("Π (k : Kind) . Π (α : k -> k) . Π (β : k) . k");
 
         let u = system_u();
-        assert_eq!(u.typeck(&Env::new(), &expr).unwrap(), ty);
+        assert_eq!(u.check_expr(&Env::new(), &expr).unwrap(), ty);
     }
 
     #[test]
@@ -283,7 +283,7 @@ mod tests {
         let u = system_u();
         let base_env = u_env();
         let actual_env = u
-            .typeck_program(
+            .check_program(
                 &base_env,
                 parse_program(
                     "
