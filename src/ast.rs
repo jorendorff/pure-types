@@ -57,17 +57,31 @@ impl<S: Display> Display for ExprEnum<S> {
             ExprEnum::ConstSort(s) => write!(f, "{}", *s),
             ExprEnum::Var(v) => write!(f, "{}", v),
             ExprEnum::Pi(p, p_ty, body) => write!(f, "Π ({} : {}) . {}", p, p_ty, body),
-            ExprEnum::Apply(fun, arg) => write!(f, "({})({})", fun, arg),
+            ExprEnum::Apply(fun, arg) => {
+                match fun.inner() {
+                    ExprEnum::Pi(..) | ExprEnum::Lambda(..) => write!(f, "({})", fun)?,
+                    _ => write!(f, "{}", fun)?,
+                }
+                write!(f, " ")?;
+                match arg.inner() {
+                    ExprEnum::Pi(..) | ExprEnum::Lambda(..) | ExprEnum::Apply(..) => {
+                        write!(f, "({})", arg)
+                    }
+                    _ => write!(f, "{}", arg),
+                }
+            }
             ExprEnum::Lambda(p, p_ty, body) => write!(f, "λ ({} : {}) . {}", p, p_ty, body),
         }
     }
 }
 
-impl<S: Clone> Expr<S> {
+impl<S> Expr<S> {
     pub(crate) fn inner(&self) -> &ExprEnum<S> {
         &self.0
     }
+}
 
+impl<S: Clone> Expr<S> {
     pub fn subst(&self, x: &Id, y: &Expr<S>) -> Expr<S> {
         match self.inner() {
             ExprEnum::ConstSort(s) => sort(s.clone()),
