@@ -12,6 +12,16 @@ pub type Id = string_cache::DefaultAtom;
 #[derive(Clone, PartialEq)]
 pub struct Expr<S>(pub(crate) Rc<ExprEnum<S>>);
 
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum ExprEnum<S> {
+    ConstSort(S),
+    Var(Id),
+    Pi(Id, Expr<S>, Expr<S>),
+    Apply(Expr<S>, Expr<S>),
+    Lambda(Id, Expr<S>, Expr<S>),
+    Blank,
+}
+
 pub fn var<S>(x: impl Into<Id>) -> Expr<S> {
     Expr(Rc::new(ExprEnum::Var(x.into())))
 }
@@ -36,6 +46,19 @@ pub fn sort<S>(s: S) -> Expr<S> {
     Expr(Rc::new(ExprEnum::ConstSort(s)))
 }
 
+pub fn blank<S>() -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Blank))
+}
+
+pub fn var_or_blank<S>(x: impl Into<Id>) -> Expr<S> {
+    let x = x.into();
+    if x == Id::from("_") {
+        blank()
+    } else {
+        var(x)
+    }
+}
+
 impl<S: Display> Display for Expr<S> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         <ExprEnum<S> as Display>::fmt(&self.0, f)
@@ -46,15 +69,6 @@ impl<S: Debug> Debug for Expr<S> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         <ExprEnum<S> as Debug>::fmt(&self.0, f)
     }
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub(crate) enum ExprEnum<S> {
-    ConstSort(S),
-    Var(Id),
-    Pi(Id, Expr<S>, Expr<S>),
-    Apply(Expr<S>, Expr<S>),
-    Lambda(Id, Expr<S>, Expr<S>),
 }
 
 impl<S: Display> Display for ExprEnum<S> {
@@ -77,6 +91,7 @@ impl<S: Display> Display for ExprEnum<S> {
                 }
             }
             ExprEnum::Lambda(p, p_ty, body) => write!(f, "λ ({} : {}) . {}", p, p_ty, body),
+            ExprEnum::Blank => write!(f, "_"),
         }
     }
 }
@@ -117,6 +132,7 @@ impl<S: Clone> Expr<S> {
                     body.subst(x, y)
                 },
             ),
+            ExprEnum::Blank => self.clone(),
         }
     }
 }

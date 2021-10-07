@@ -42,7 +42,7 @@ Prim: Expr<USort> = {
     "(" <t:Term> ")" =>
         t,
     <v:Id> =>
-        ast::var(v),
+        ast::var_or_blank(v),
     "Type" =>
         ast::sort(USort::Type),
     "Kind" =>

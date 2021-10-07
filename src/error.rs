@@ -32,4 +32,7 @@ pub enum TypeCheckError<S> {
 
     #[error("invalid lambda `{0}`: the type of the argument type `{1}` is not a sort")]
     InvalidLambdaParameterType(Expr<S>, Expr<S>),
+
+    #[error("can't type-check expressions containing blanks")]
+    Blank,
 }

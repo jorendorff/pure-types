@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     ast::{self, Def, ExprEnum},
-    Env, Expr, Id, TypeCheckError,
+    Env, Expr, TypeCheckError,
 };
 
 pub struct PureTypeSystem<S> {
@@ -89,6 +89,9 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                 let product_ty = ast::pi(p.clone(), p_ty.clone(), body_ty);
                 let _product_ty_ty = self.check_expr(env, &product_ty)?;
                 product_ty
+            }
+            ExprEnum::Blank => {
+                return Err(TypeCheckError::Blank);
             }
         })
     }
