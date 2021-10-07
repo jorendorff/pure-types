@@ -1,68 +1,62 @@
-use crate::ast::{self, Binder, Def, Expr, Id, USort};
+use crate::cst::{self, Binder, Def, Expr, Id};
 
 grammar;
 
-pub Def: Def<USort> = {
+pub Def: Def = {
     "def" <p:Id> ":" <ty:Term> ":=" <b:Term> ";" =>
-        ast::def(p, Some(ty), Some(b)),
+        cst::def(p, Some(ty), Some(b)),
     "def" <p:Id> ":=" <b:Term> ";" =>
-        ast::def(p, None, Some(b)),
+        cst::def(p, None, Some(b)),
     "axiom" <p:Id> ":" <ty:Term> ";" =>
-        ast::def(p, Some(ty), None),
+        cst::def(p, Some(ty), None),
 }
 
-pub Program: Vec<Def<USort>> = {
+pub Program: Vec<Def> = {
     Def* => <>
 }
 
-pub Term: Expr<USort> = {
+pub Term: Expr = {
     "λ" <binders:Binders> "." <b:Term> =>
-        ast::binders_to_lambda(binders, b),
+        cst::lambda(binders, b),
     "Π" <binders:Binders> "." <b:Term> =>
-        ast::binders_to_pi(binders, b),
+        cst::pi(binders, b),
     <e:Op> =>
         e,
 }
 
-Binders: Vec<Binder<USort>> = {
+Binders: Vec<Binder> = {
     <id:Id> ":" <ty:Term> =>
-      vec![Binder { ids: vec![id], ty }],
+        vec![cst::binder(vec![id], ty)],
     <proper_binders:Binder+> =>
-      proper_binders,
+        proper_binders,
 }
 
-Binder: Binder<USort> = {
+Binder: Binder = {
     "(" <ids:Id+> ":" <ty:Term> ")" =>
-      Binder { ids, ty },
+        cst::binder(ids, ty),
     <id:Id> =>
-      Binder { ids: vec![id], ty: ast::blank() },
+        Binder { ids: vec![id], ty: None },
 }
 
-Op: Expr<USort> = {
+Op: Expr = {
     <e:Call> =>
         e,
     <left:Call> "->" <right:Op> =>
-        ast::arrow(left, right),
+        cst::arrow(left, right),
 }
 
-Call: Expr<USort> = {
+Call: Expr = {
     <p:Prim> =>
         p,
     <f:Call> <a:Prim> =>
-        ast::apply(f, a),
+        cst::apply(f, a),
 }
 
-Prim: Expr<USort> = {
+Prim: Expr = {
     "(" <t:Term> ")" =>
         t,
     <v:Id> =>
-        ast::var_or_blank(v),
-    "Type" =>
-        ast::sort(USort::Type),
-    "Kind" =>
-        ast::sort(USort::Kind),
-    "Triangle" =>
-        ast::sort(USort::Triangle),
+        cst::var_or_blank(v),
 }
 
 Id: Id = <s:r"\w+"> => Id::from(s);

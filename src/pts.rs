@@ -160,18 +160,32 @@ mod tests {
     }
 
     fn parse(s: &'static str) -> Expr<USort> {
-        TermParser::new().parse(s).context("parse error").unwrap()
-    }
-
-    fn no_parse(s: &'static str) {
-        assert!(TermParser::new().parse(s).is_err())
+        let cst = TermParser::new().parse(s).context("parse error").unwrap();
+        Expr::from_cst(cst)
     }
 
     fn parse_program(s: &'static str) -> Vec<Def<USort>> {
-        ProgramParser::new()
+        let program_cst = ProgramParser::new()
             .parse(s)
             .context("parse error")
-            .unwrap()
+            .unwrap();
+        ast::program_from_cst(program_cst)
+    }
+
+    #[test]
+    fn test_binder_shorthands() {
+        // binder shorthands
+        assert_eq!(parse("λ a : b c . a"), parse("λ (a : b c) . a"));
+        assert_eq!(parse("λ a b . a b"), parse("λ (a : _) . λ (b : _) . a b"));
+        assert_eq!(
+            parse("λ (a b c : _) . a"),
+            parse("λ (a : _) . (λ (b : _) . (λ (c : _) . a))"),
+        );
+
+        assert_eq!(
+            parse("Π (p q : Prop) . p -> q -> and p q"),
+            parse("Π (p : Prop) . (Π (q : Prop) . (p -> (q -> (and p q))))"),
+        );
     }
 
     #[test]
@@ -197,66 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parser() {
-        assert_eq!(parse("Type"), sort(Type));
-        assert_eq!(parse("Kind"), sort(Kind));
-
-        assert_eq!(
-            parse("λ (t : Type) . λ (x : t) . x"),
-            lambda("t", sort(Type), lambda("x", var("t"), var("x"))),
-        );
-
-        assert_eq!(
-            parse("λ (k : Kind) . λ (α : k -> k) . λ (β : k) . (α (α β))"),
-            lambda(
-                "k",
-                sort(Kind),
-                lambda(
-                    "α",
-                    arrow(var("k"), var("k")),
-                    lambda("β", var("k"), apply(var("α"), apply(var("α"), var("β"))))
-                )
-            )
-        );
-
-        // operator precedence and associativity
-        assert_eq!(parse("a b c"), apply(apply(var("a"), var("b")), var("c")));
-        assert_eq!(
-            parse("a -> b -> c"),
-            arrow(var("a"), arrow(var("b"), var("c")))
-        );
-        assert_eq!(parse("a b -> c d"), parse("(a b) -> (c d)"));
-
-        // binder shorthands
-        assert_eq!(parse("λ a : b c . a"), parse("λ (a : b c) . a"));
-        assert_eq!(parse("λ a b . a b"), parse("λ (a : _) . λ (b : _) . a b"));
-        assert_eq!(
-            parse("λ (a b c : _) . a"),
-            parse("λ (a : _) . (λ (b : _) . (λ (c : _) . a))"),
-        );
-
-        assert_eq!(
-            parse("Π (p q : Prop) . p -> q -> and p q"),
-            parse("Π (p : Prop) . (Π (q : Prop) . (p -> (q -> (and p q))))"),
-        );
-    }
-
-    #[test]
-    fn binder_shorthand_limits() {
-        // a binder with type can be unparenthesized, as in `λ a : t . x`,
-        // but only when the lambda has a single argument.
-        no_parse("λ a : Type b : Type . a");
-        no_parse("λ (a : Type) b : Type . a");
-        no_parse("λ a : Type (b : Type) . a");
-        no_parse("Π a : Type b : Type . a");
-        no_parse("Π (a : Type) b : Type . a");
-        no_parse("Π a : Type (b : Type) . a");
-        no_parse("Π a b : Type . a");
-        assert_eq!(parse("Π a : t b . a"), parse("Π (a : (t b)) . a"));
-    }
-
-    #[test]
-    fn test_program_parser() {
+    fn test_check_program() {
         let u = system_u();
         let base_env = u_env();
         let actual_env = u
@@ -290,6 +245,12 @@ mod tests {
         assert_eq!(actual_env, expected_env);
     }
 
+    fn assert_checks_in_system_u(program: &'static str) {
+        let u = system_u();
+        let base_env = u_env();
+        u.check_program(&base_env, parse_program(program)).unwrap();
+    }
+
     #[test]
     fn no_dependent_types_in_system_u() {
         // The `eq` type takes a type and two values as parameters. This is possible
@@ -301,5 +262,33 @@ mod tests {
 
         let program = parse_program("axiom nat : Type; axiom vect : Type -> nat -> Type;");
         assert!(u.check_program(&u_env(), program).is_err());
+    }
+
+    #[test]
+    fn imp_trans() {
+        assert_checks_in_system_u(
+            "
+            def imp_trans :
+              Π (a b c : Type) (ab : a -> b) (bc : b -> c) (h : a) . c :=
+                λ (a b c : Type) (ab : a -> b) (bc : b -> c) (h : a) . bc (ab h);
+            ",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn not_false() {
+        assert_checks_in_system_u(
+            "
+            axiom true : Type;
+            axiom true_intro : true;
+
+            axiom false : Type;
+            axiom false_elim : Π (x : Type) . false -> x;
+
+            def not : Type -> Type := λ (p : Type) . p -> false;
+            def not_false : not false := λ (f : false) . f;
+            ",
+        );
     }
 }

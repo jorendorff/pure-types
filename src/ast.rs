@@ -5,6 +5,8 @@ use std::{
     rc::Rc,
 };
 
+use crate::cst;
+
 /// The type of identifiers.
 pub type Id = string_cache::DefaultAtom;
 
@@ -27,64 +29,6 @@ pub(crate) enum ExprEnum<S> {
     Apply(Expr<S>, Expr<S>),
     Lambda(Id, Expr<S>, Expr<S>),
     Blank,
-}
-
-pub(crate) struct Binder<S> {
-    pub(crate) ids: Vec<Id>,
-    pub(crate) ty: Expr<S>,
-}
-
-pub fn var<S>(x: impl Into<Id>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Var(x.into())))
-}
-
-pub fn apply<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Apply(f, a)))
-}
-
-pub fn lambda<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Lambda(p.into(), ty, b)))
-}
-
-pub(crate) fn binders_to_lambda<S>(binders: Vec<Binder<S>>, b: Expr<S>) -> Expr<S> {
-    binders
-        .into_iter()
-        .flat_map(|Binder { ids, ty }| ids.into_iter().map(move |id| (id, ty.clone())))
-        .rev()
-        .fold(b, |b, (id, ty)| lambda(id, ty, b))
-}
-
-pub fn pi<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Pi(p.into(), ty, b)))
-}
-
-pub(crate) fn binders_to_pi<S>(binders: Vec<Binder<S>>, b: Expr<S>) -> Expr<S> {
-    binders
-        .into_iter()
-        .flat_map(|Binder { ids, ty }| ids.into_iter().map(move |id| (id, ty.clone())))
-        .rev()
-        .fold(b, |b, (id, ty)| pi(id, ty, b))
-}
-
-pub fn arrow<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Pi(Id::from("_"), f, a)))
-}
-
-pub fn sort<S>(s: S) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::ConstSort(s)))
-}
-
-pub fn blank<S>() -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Blank))
-}
-
-pub fn var_or_blank<S>(x: impl Into<Id>) -> Expr<S> {
-    let x = x.into();
-    if x == Id::from("_") {
-        blank()
-    } else {
-        var(x)
-    }
 }
 
 impl<S: Display> Display for Expr<S> {
@@ -124,10 +68,56 @@ impl<S: Display> Display for ExprEnum<S> {
     }
 }
 
+pub trait Sort {
+    fn type_sort() -> Self;
+    fn kind_sort() -> Self;
+}
+
+impl<S: Sort> Expr<S> {
+    pub(crate) fn from_cst(expr: cst::Expr) -> Self {
+        match *expr.0 {
+            cst::ExprEnum::Var(id) => match &*id {
+                "Type" => sort(S::type_sort()),
+                "Kind" => sort(S::kind_sort()),
+                _ => var(id),
+            },
+            cst::ExprEnum::Pi(binders, body) => desugar_binders(ExprEnum::Pi, binders, body),
+            cst::ExprEnum::Arrow(arg_ty, ret_ty) => {
+                arrow(Self::from_cst(arg_ty), Self::from_cst(ret_ty))
+            }
+            cst::ExprEnum::Lambda(binders, body) => {
+                desugar_binders(ExprEnum::Lambda, binders, body)
+            }
+            cst::ExprEnum::Apply(fun, arg) => apply(Self::from_cst(fun), Self::from_cst(arg)),
+            cst::ExprEnum::Blank => blank(),
+        }
+    }
+}
+
 impl<S> Expr<S> {
     pub(crate) fn inner(&self) -> &ExprEnum<S> {
         &self.0
     }
+}
+
+fn desugar_binders<S: Sort>(
+    construct: fn(Id, Expr<S>, Expr<S>) -> ExprEnum<S>,
+    binders: Vec<cst::Binder>,
+    body: cst::Expr,
+) -> Expr<S> {
+    binders
+        .into_iter()
+        .flat_map(|binder| {
+            let ty = match binder.ty {
+                Some(ty) => Expr::from_cst(ty),
+                None => blank(),
+            };
+            binder.ids.into_iter().map(move |id| (id, ty.clone()))
+        })
+        .rev()
+        .fold(Expr::from_cst(body), |body, (id, ty)| {
+            Expr(Rc::new(construct(id, ty, body)))
+        })
 }
 
 impl<S: Clone> Expr<S> {
@@ -172,8 +162,18 @@ pub struct Def<S> {
     pub term: Option<Expr<S>>,
 }
 
-pub fn def<S>(id: Id, ty: Option<Expr<S>>, term: Option<Expr<S>>) -> Def<S> {
-    Def { id, ty, term }
+impl<S: Sort> Def<S> {
+    fn from_cst(cst: cst::Def) -> Self {
+        Def {
+            id: cst.id,
+            ty: cst.ty.map(Expr::from_cst),
+            term: cst.term.map(Expr::from_cst),
+        }
+    }
+}
+
+pub fn program_from_cst<S: Sort>(cst: Vec<cst::Def>) -> Vec<Def<S>> {
+    cst.into_iter().map(Def::from_cst).collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -192,4 +192,56 @@ impl Display for USort {
         };
         write!(f, "{}", c)
     }
+}
+
+impl Sort for USort {
+    fn type_sort() -> Self {
+        USort::Type
+    }
+    fn kind_sort() -> Self {
+        USort::Kind
+    }
+}
+
+// *** Convenience constructors
+
+pub fn var<S>(x: impl Into<Id>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Var(x.into())))
+}
+
+pub fn apply<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Apply(f, a)))
+}
+
+pub fn lambda<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Lambda(p.into(), ty, b)))
+}
+
+pub fn pi<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Pi(p.into(), ty, b)))
+}
+
+pub fn arrow<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Pi(Id::from("_"), f, a)))
+}
+
+pub fn sort<S>(s: S) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::ConstSort(s)))
+}
+
+pub fn blank<S>() -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Blank))
+}
+
+pub fn var_or_blank<S>(x: impl Into<Id>) -> Expr<S> {
+    let x = x.into();
+    if x == Id::from("_") {
+        blank()
+    } else {
+        var(x)
+    }
+}
+
+pub fn def<S>(id: Id, ty: Option<Expr<S>>, term: Option<Expr<S>>) -> Def<S> {
+    Def { id, ty, term }
 }
