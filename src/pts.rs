@@ -247,6 +247,8 @@ mod tests {
         no_parse("Π a : Type b : Type . a");
         no_parse("Π (a : Type) b : Type . a");
         no_parse("Π a : Type (b : Type) . a");
+        no_parse("Π a b : Type . a");
+        assert_eq!(parse("Π a : t b . a"), parse("Π (a : (t b)) . a"));
     }
 
     #[test]
