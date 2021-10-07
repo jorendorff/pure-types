@@ -9,8 +9,15 @@ use std::{
 pub type Id = string_cache::DefaultAtom;
 
 /// Expressions.
-#[derive(Clone, PartialEq)]
+#[derive(PartialEq)]
 pub struct Expr<S>(pub(crate) Rc<ExprEnum<S>>);
+
+// Manual implementation, as `#[derive(Clone)]` derives an unwanted `S: Clone` bound.
+impl<S> Clone for Expr<S> {
+    fn clone(&self) -> Self {
+        Expr(self.0.clone())
+    }
+}
 
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum ExprEnum<S> {
@@ -23,7 +30,7 @@ pub(crate) enum ExprEnum<S> {
 }
 
 pub(crate) struct Binder<S> {
-    pub(crate) id: Id,
+    pub(crate) ids: Vec<Id>,
     pub(crate) ty: Expr<S>,
 }
 
@@ -42,8 +49,9 @@ pub fn lambda<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
 pub(crate) fn binders_to_lambda<S>(binders: Vec<Binder<S>>, b: Expr<S>) -> Expr<S> {
     binders
         .into_iter()
+        .flat_map(|Binder { ids, ty }| ids.into_iter().map(move |id| (id, ty.clone())))
         .rev()
-        .fold(b, |b, Binder { id, ty }| lambda(id, ty, b))
+        .fold(b, |b, (id, ty)| lambda(id, ty, b))
 }
 
 pub fn pi<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
@@ -53,8 +61,9 @@ pub fn pi<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
 pub(crate) fn binders_to_pi<S>(binders: Vec<Binder<S>>, b: Expr<S>) -> Expr<S> {
     binders
         .into_iter()
+        .flat_map(|Binder { ids, ty }| ids.into_iter().map(move |id| (id, ty.clone())))
         .rev()
-        .fold(b, |b, Binder { id, ty }| pi(id, ty, b))
+        .fold(b, |b, (id, ty)| pi(id, ty, b))
 }
 
 pub fn arrow<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {

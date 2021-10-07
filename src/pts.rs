@@ -230,9 +230,13 @@ mod tests {
         // binder shorthands
         assert_eq!(parse("λ a : b c . a"), parse("λ (a : b c) . a"));
         assert_eq!(parse("λ a b . a b"), parse("λ (a : _) . λ (b : _) . a b"));
+        assert_eq!(
+            parse("λ (a b c : _) . a"),
+            parse("λ (a : _) . (λ (b : _) . (λ (c : _) . a))"),
+        );
 
         assert_eq!(
-            parse("Π (p : Prop) (q : Prop) . p -> q -> and p q"),
+            parse("Π (p q : Prop) . p -> q -> and p q"),
             parse("Π (p : Prop) . (Π (q : Prop) . (p -> (q -> (and p q))))"),
         );
     }
@@ -284,5 +288,18 @@ mod tests {
         );
 
         assert_eq!(actual_env, expected_env);
+    }
+
+    #[test]
+    fn no_dependent_types_in_system_u() {
+        // The `eq` type takes a type and two values as parameters. This is possible
+        // in System U, but the return type would have to be another value, not
+        // a type.
+        let u = system_u();
+        let program = parse_program("axiom eq : Π (t : Type) . t -> t -> Type;");
+        assert!(u.check_program(&u_env(), program).is_err());
+
+        let program = parse_program("axiom nat : Type; axiom vect : Type -> nat -> Type;");
+        assert!(u.check_program(&u_env(), program).is_err());
     }
 }

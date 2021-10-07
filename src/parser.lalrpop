@@ -26,16 +26,16 @@ pub Term: Expr<USort> = {
 
 Binders: Vec<Binder<USort>> = {
     <id:Id> ":" <ty:Term> =>
-      vec![Binder { id, ty }],
+      vec![Binder { ids: vec![id], ty }],
     <proper_binders:Binder+> =>
       proper_binders,
 }
 
 Binder: Binder<USort> = {
-    "(" <id:Id> ":" <ty:Term> ")" =>
-      Binder { id, ty },
+    "(" <ids:Id+> ":" <ty:Term> ")" =>
+      Binder { ids, ty },
     <id:Id> =>
-      Binder { id, ty: ast::blank() },
+      Binder { ids: vec![id], ty: ast::blank() },
 }
 
 Op: Expr<USort> = {
