@@ -1,4 +1,4 @@
-use crate::ast::{self, Def, Expr, Id, USort};
+use crate::ast::{self, Binder, Def, Expr, Id, USort};
 
 grammar;
 
@@ -16,12 +16,26 @@ pub Program: Vec<Def<USort>> = {
 }
 
 pub Term: Expr<USort> = {
-    "λ" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>
-        ast::lambda(p, ty, b),
-    "Π" "(" <p:Id> ":" <ty:Term> ")" "." <b:Term> =>
-        ast::pi(p, ty, b),
+    "λ" <binders:Binders> "." <b:Term> =>
+        ast::binders_to_lambda(binders, b),
+    "Π" <binders:Binders> "." <b:Term> =>
+        ast::binders_to_pi(binders, b),
     <e:Op> =>
         e,
+}
+
+Binders: Vec<Binder<USort>> = {
+    <id:Id> ":" <ty:Term> =>
+      vec![Binder { id, ty }],
+    <proper_binders:Binder+> =>
+      proper_binders,
+}
+
+Binder: Binder<USort> = {
+    "(" <id:Id> ":" <ty:Term> ")" =>
+      Binder { id, ty },
+    <id:Id> =>
+      Binder { id, ty: ast::blank() },
 }
 
 Op: Expr<USort> = {

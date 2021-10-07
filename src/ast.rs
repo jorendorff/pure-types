@@ -22,6 +22,11 @@ pub(crate) enum ExprEnum<S> {
     Blank,
 }
 
+pub(crate) struct Binder<S> {
+    pub(crate) id: Id,
+    pub(crate) ty: Expr<S>,
+}
+
 pub fn var<S>(x: impl Into<Id>) -> Expr<S> {
     Expr(Rc::new(ExprEnum::Var(x.into())))
 }
@@ -34,8 +39,22 @@ pub fn lambda<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
     Expr(Rc::new(ExprEnum::Lambda(p.into(), ty, b)))
 }
 
+pub(crate) fn binders_to_lambda<S>(binders: Vec<Binder<S>>, b: Expr<S>) -> Expr<S> {
+    binders
+        .into_iter()
+        .rev()
+        .fold(b, |b, Binder { id, ty }| lambda(id, ty, b))
+}
+
 pub fn pi<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
     Expr(Rc::new(ExprEnum::Pi(p.into(), ty, b)))
+}
+
+pub(crate) fn binders_to_pi<S>(binders: Vec<Binder<S>>, b: Expr<S>) -> Expr<S> {
+    binders
+        .into_iter()
+        .rev()
+        .fold(b, |b, Binder { id, ty }| pi(id, ty, b))
 }
 
 pub fn arrow<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {

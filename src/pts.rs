@@ -163,6 +163,10 @@ mod tests {
         TermParser::new().parse(s).context("parse error").unwrap()
     }
 
+    fn no_parse(s: &'static str) {
+        assert!(TermParser::new().parse(s).is_err())
+    }
+
     fn parse_program(s: &'static str) -> Vec<Def<USort>> {
         ProgramParser::new()
             .parse(s)
@@ -197,12 +201,6 @@ mod tests {
         assert_eq!(parse("Type"), sort(Type));
         assert_eq!(parse("Kind"), sort(Kind));
 
-        assert_eq!(parse("a b c"), apply(apply(var("a"), var("b")), var("c")));
-        assert_eq!(
-            parse("a -> b -> c"),
-            arrow(var("a"), arrow(var("b"), var("c")))
-        );
-
         assert_eq!(
             parse("λ (t : Type) . λ (x : t) . x"),
             lambda("t", sort(Type), lambda("x", var("t"), var("x"))),
@@ -220,6 +218,35 @@ mod tests {
                 )
             )
         );
+
+        // operator precedence and associativity
+        assert_eq!(parse("a b c"), apply(apply(var("a"), var("b")), var("c")));
+        assert_eq!(
+            parse("a -> b -> c"),
+            arrow(var("a"), arrow(var("b"), var("c")))
+        );
+        assert_eq!(parse("a b -> c d"), parse("(a b) -> (c d)"));
+
+        // binder shorthands
+        assert_eq!(parse("λ a : b c . a"), parse("λ (a : b c) . a"));
+        assert_eq!(parse("λ a b . a b"), parse("λ (a : _) . λ (b : _) . a b"));
+
+        assert_eq!(
+            parse("Π (p : Prop) (q : Prop) . p -> q -> and p q"),
+            parse("Π (p : Prop) . (Π (q : Prop) . (p -> (q -> (and p q))))"),
+        );
+    }
+
+    #[test]
+    fn binder_shorthand_limits() {
+        // a binder with type can be unparenthesized, as in `λ a : t . x`,
+        // but only when the lambda has a single argument.
+        no_parse("λ a : Type b : Type . a");
+        no_parse("λ (a : Type) b : Type . a");
+        no_parse("λ a : Type (b : Type) . a");
+        no_parse("Π a : Type b : Type . a");
+        no_parse("Π (a : Type) b : Type . a");
+        no_parse("Π a : Type (b : Type) . a");
     }
 
     #[test]
