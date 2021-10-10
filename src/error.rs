@@ -24,14 +24,20 @@ pub enum TypeCheckError<S> {
     )]
     InvalidPiSorts(Expr<S>, S, S),
 
+    #[error("invalid lambda `{0}`: the type of the argument type `{1}` is not a sort")]
+    InvalidLambdaParameterType(Expr<S>, Expr<S>),
+
+    #[error("invalid lambda `{0}`: the body is of type `{1}`, and that type's type is not a sort")]
+    InvalidLambdaReturnType(Expr<S>, Expr<S>),
+
+    #[error("invalid lambda `{0}`: the argument type is a {1:?} and the return type is a {2:?}")]
+    InvalidLambdaSorts(Expr<S>, S, S),
+
     #[error("type error in function call `{0}`: function expected, type of `{1}` is `{2}`")]
     FunctionExpected(Expr<S>, Expr<S>, Expr<S>),
 
     #[error("argument is the wrong type in `{0}`: expected `{1}`, got `{2}`")]
     ArgumentTypeMismatch(Expr<S>, Expr<S>, Expr<S>),
-
-    #[error("invalid lambda `{0}`: the type of the argument type `{1}` is not a sort")]
-    InvalidLambdaParameterType(Expr<S>, Expr<S>),
 
     #[error("can't type-check expressions containing blanks")]
     Blank,

@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     ast::{self, Def, ExprEnum},
-    Env, Expr, TypeCheckError,
+    Env, Expr, Thunk, TypeCheckError,
 };
 
 pub struct PureTypeSystem<S> {
@@ -17,84 +17,164 @@ pub struct PureTypeSystem<S> {
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
-    pub fn check_expr(&self, env: &Env<S>, expr: &Expr<S>) -> Result<Expr<S>, TypeCheckError<S>> {
-        Ok(match expr.inner() {
+    pub fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
+        let env = expr.env.clone();
+        Ok(match expr.term.inner() {
             ExprEnum::ConstSort(s) => {
                 if let Some(meta) = self.axioms.get(s) {
-                    ast::sort(meta.clone())
+                    Thunk {
+                        term: ast::sort(meta.clone()),
+                        env,
+                    }
                 } else {
                     return Err(TypeCheckError::UntypedSort(s.clone()));
                 }
             }
             ExprEnum::Var(v) => {
-                if let Some(v_ty) = env.get(v) {
+                if let Some(v_ty) = expr.env.get(v) {
                     v_ty.clone()
                 } else {
                     return Err(TypeCheckError::UndeclaredVar(v.clone()));
                 }
             }
-            ExprEnum::Pi(x, x_ty, body_ty) => {
-                let x_sort = match self.check_expr(env, x_ty)?.inner() {
-                    ExprEnum::ConstSort(s) => s.clone(),
-                    _ => {
-                        return Err(TypeCheckError::InvalidPiParameterType(
-                            expr.clone(),
-                            x_ty.clone(),
-                        ))
-                    }
+            ExprEnum::Pi(param, param_ty, body_ty) => {
+                let param_ty_thunk = Thunk {
+                    term: param_ty.clone(),
+                    env: env.clone(),
                 };
-                let body_ty_ty = self.check_expr(&env.with(x.clone(), x_ty.clone()), body_ty)?;
-                let body_sort = match body_ty_ty.inner() {
-                    ExprEnum::ConstSort(s) => s.clone(),
-                    _ => {
-                        return Err(TypeCheckError::InvalidPiReturnType(
-                            expr.clone(),
-                            body_ty.clone(),
-                        ))
-                    }
+                let param_ty_ty_thunk = self.check_expr(&param_ty_thunk)?;
+                let body_ty_thunk = Thunk {
+                    term: body_ty.clone(),
+                    env: env.with(param.clone(), param_ty_thunk),
                 };
-                if let Some(s) = self.rules.get(&(x_sort.clone(), body_sort.clone())) {
-                    ast::sort(s.clone())
-                } else {
-                    return Err(TypeCheckError::InvalidPiSorts(
-                        expr.clone(),
-                        x_sort,
-                        body_sort,
-                    ));
+                let sort = self.check_pi_type(
+                    param_ty_ty_thunk,
+                    body_ty_thunk,
+                    &|| TypeCheckError::InvalidPiParameterType(expr.term.clone(), param_ty.clone()),
+                    &|| TypeCheckError::InvalidPiReturnType(expr.term.clone(), body_ty.clone()),
+                    &|s1, s2| TypeCheckError::InvalidPiSorts(expr.term.clone(), s1, s2),
+                )?;
+                Thunk {
+                    term: ast::sort(sort),
+                    env,
                 }
             }
             ExprEnum::Apply(f, arg) => {
-                let f_ty = self.check_expr(env, f)?;
-                if let ExprEnum::Pi(x, expected_arg_ty, body_ty_expr) = f_ty.inner() {
-                    let actual_arg_ty: Expr<S> = self.check_expr(env, arg)?;
+                let f_thunk = Thunk {
+                    term: f.clone(),
+                    env: env.clone(),
+                };
+                let arg_thunk = Thunk {
+                    term: arg.clone(),
+                    env,
+                };
+                let f_ty = self.check_expr(&f_thunk)?;
+                println!("it seems the type of {} is {}", f.clone(), f_ty.term);
+                if let ExprEnum::Pi(x, expected_arg_ty, body_ty_expr) = f_ty.term.inner() {
+                    let actual_arg_ty: Thunk<S> = self.check_expr(&arg_thunk)?;
                     let expected_arg_ty: Expr<S> = expected_arg_ty.clone();
-                    if actual_arg_ty != expected_arg_ty {
+                    // XXX FIXME bug
+                    if actual_arg_ty.term != expected_arg_ty {
+                        println!(
+                            "{}",
+                            TypeCheckError::ArgumentTypeMismatch(
+                                expr.term.clone(),
+                                expected_arg_ty.clone(),
+                                actual_arg_ty.term.clone(),
+                            )
+                        );
                         return Err(TypeCheckError::ArgumentTypeMismatch(
-                            expr.clone(),
+                            expr.term.clone(),
                             expected_arg_ty,
-                            actual_arg_ty,
+                            actual_arg_ty.term,
                         ));
                     }
-                    body_ty_expr.subst(x, &actual_arg_ty)
+                    Thunk {
+                        term: body_ty_expr.clone(),
+                        env: f_ty.env.with(x.clone(), arg_thunk),
+                    }
                 } else {
                     return Err(TypeCheckError::FunctionExpected(
-                        expr.clone(),
+                        expr.term.clone(),
                         f.clone(),
-                        f_ty,
+                        f_ty.term,
                     ));
                 }
             }
-            ExprEnum::Lambda(p, p_ty, body) => {
-                let body_ty = self.check_expr(&env.with(p.clone(), p_ty.clone()), body)?;
-                let product_ty = ast::pi(p.clone(), p_ty.clone(), body_ty);
-                let _product_ty_ty = self.check_expr(env, &product_ty)?;
-                product_ty
+            ExprEnum::Lambda(param, param_ty, body) => {
+                let param_ty_thunk = Thunk {
+                    term: param_ty.clone(),
+                    env: env.clone(),
+                };
+                let param_ty_ty_thunk = self.check_expr(&param_ty_thunk)?;
+
+                let body_env = env.with(param.clone(), param_ty_thunk);
+                let body_thunk = Thunk {
+                    env: body_env,
+                    term: body.clone(),
+                };
+                let body_ty_thunk = self.check_expr(&body_thunk)?;
+                let body_ty = body_ty_thunk.term.clone();
+
+                self.check_pi_type(
+                    param_ty_ty_thunk,
+                    body_ty_thunk,
+                    &|| {
+                        TypeCheckError::InvalidLambdaParameterType(
+                            expr.term.clone(),
+                            param_ty.clone(),
+                        )
+                    },
+                    &|| TypeCheckError::InvalidLambdaReturnType(expr.term.clone(), body_ty.clone()),
+                    &|s1, s2| TypeCheckError::InvalidLambdaSorts(expr.term.clone(), s1, s2),
+                )?;
+
+                // XXX TODO: hopeless environment confusion here
+                Thunk {
+                    term: ast::pi(param, param_ty.clone(), body_ty),
+                    env,
+                }
             }
             ExprEnum::Blank => {
                 return Err(TypeCheckError::Blank);
             }
         })
     }
+
+    pub fn thunk_as_sort(&self, thunk: Thunk<S>) -> Option<S> {
+        match thunk.term.inner() {
+            ExprEnum::ConstSort(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn check_pi_type(
+        &self,
+        param_ty_ty_thunk: Thunk<S>,
+        body_ty_thunk: Thunk<S>,
+        parameter_error: &dyn Fn() -> TypeCheckError<S>,
+        return_error: &dyn Fn() -> TypeCheckError<S>,
+        sort_error: &dyn Fn(S, S) -> TypeCheckError<S>,
+    ) -> Result<S, TypeCheckError<S>> {
+        let param_sort = match self.thunk_as_sort(param_ty_ty_thunk) {
+            Some(sort) => sort,
+            None => return Err(parameter_error()),
+        };
+        let body_ty_ty = self.check_expr(&body_ty_thunk)?;
+        let body_sort = match self.thunk_as_sort(body_ty_ty) {
+            Some(sort) => sort,
+            None => return Err(return_error()),
+        };
+        if let Some(sort) = self.rules.get(&(param_sort.clone(), body_sort.clone())) {
+            Ok(sort.clone())
+        } else {
+            Err(sort_error(param_sort, body_sort))
+        }
+    }
+
+    //pub fn check_sort() -> Result<S, TypeCheckError<S>> {
+    //
+    //}
 
     pub fn check_program(
         &self,
@@ -105,18 +185,29 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         for def in program {
             let ty = if let Some(defined_ty) = def.ty {
                 // There's a defined type; type-check to make sure it's not nonsense.
-                self.check_expr(&env, &defined_ty)?;
+                self.check_expr(&Thunk {
+                    env: env.clone(),
+                    term: defined_ty.clone(),
+                })?;
 
                 if let Some(term) = def.term {
-                    let actual_ty = self.check_expr(&env, &term)?;
-                    assert_eq!(actual_ty, defined_ty); // unify
+                    let env = env.clone();
+                    let actual_ty = self.check_expr(&Thunk { env, term })?;
+                    assert_eq!(actual_ty.term, defined_ty); // TODO unify
+                    actual_ty
+                } else {
+                    // XXX hopeless env confusion
+                    Thunk {
+                        term: defined_ty,
+                        env: env.clone(),
+                    }
                 }
-                defined_ty
             } else {
+                let env = env.clone();
                 let term = def.term.expect("def must have a term or type");
-                self.check_expr(&env, &term)?
+                self.check_expr(&Thunk { env, term })?
             };
-            env.push(def.id, ty);
+            env = env.with(def.id, ty);
         }
         Ok(env)
     }
@@ -194,11 +285,19 @@ mod tests {
 
         // λ (t : *), λ (x : t), x
         let id_expr = lambda("t", sort(Type), lambda("x", var("t"), var("x")));
-        let id_type = u.check_expr(&Env::new(), &id_expr).unwrap();
-        println!("The type of `{}` is `{}`", id_expr, id_type);
+        let id_type = u
+            .check_expr(&Thunk {
+                term: id_expr.clone(),
+                env: Env::new(),
+            })
+            .unwrap();
+        println!("The type of `{}` is `{}`", id_expr, id_type.term);
 
         // Π (t : *), Π (x : t), t
-        assert_eq!(id_type, pi("t", sort(Type), pi("x", var("t"), var("t"))),);
+        assert_eq!(
+            id_type.term,
+            pi("t", sort(Type), pi("x", var("t"), var("t"))),
+        );
     }
 
     #[test]
@@ -207,7 +306,15 @@ mod tests {
         let ty = parse("Π (k : Kind) . Π (α : k -> k) . Π (β : k) . k");
 
         let u = system_u();
-        assert_eq!(u.check_expr(&Env::new(), &expr).unwrap(), ty);
+        assert_eq!(
+            u.check_expr(&Thunk {
+                term: expr,
+                env: Env::new()
+            })
+            .unwrap()
+            .term,
+            ty
+        );
     }
 
     #[test]
@@ -220,29 +327,28 @@ mod tests {
                 parse_program(
                     "
                 axiom true : Type;
-                axiom trivial : true;
-                def tx : Π (p : Type) . p -> true := λ (p : Type) . λ (_ : p) . trivial;
+                axiom true_intro : true;
+                def tx : Π (p : Type) . p -> true := λ (p : Type) . λ (_ : p) . true_intro;
                 axiom false : Type;
-                axiom ffs : Π (p : Type) . false -> p;
+                axiom false_elim : Π (p : Type) . false -> p;
                 ",
                 ),
             )
             .unwrap();
 
-        let mut expected_env = base_env;
-        expected_env.push(Id::from("true"), sort(Type));
-        expected_env.push(Id::from("trivial"), var("true"));
-        expected_env.push(
-            Id::from("ffs"),
-            pi("p", sort(Type), arrow(var("false"), var("p"))),
-        );
-        expected_env.push(Id::from("false"), sort(Type));
-        expected_env.push(
-            Id::from("tx"),
-            pi("p", sort(Type), arrow(var("p"), var("true"))),
-        );
+        let get = |s| &actual_env.get(&Id::from(s)).unwrap().term;
 
-        assert_eq!(actual_env, expected_env);
+        assert_eq!(get("true"), &sort(Type));
+        assert_eq!(get("true_intro"), &var("true"));
+        assert_eq!(
+            get("tx"),
+            &pi("p", sort(Type), arrow(var("p"), var("true"))),
+        );
+        assert_eq!(get("false"), &sort(Type));
+        assert_eq!(
+            get("false_elim"),
+            &pi("p", sort(Type), arrow(var("false"), var("p"))),
+        );
     }
 
     fn assert_checks_in_system_u(program: &'static str) {

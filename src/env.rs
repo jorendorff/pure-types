@@ -10,19 +10,22 @@ use rpds::HashTrieMap;
 use crate::{Expr, Id};
 
 /// A static environment, mapping identifiers to type-expressions.
-///
-/// XXX FIXME: A type-expression may contain an identifier. This identifier
-/// should be interpreted with reference to the immediately enclosing
-/// environment. But we don't store anything that would make it possible to
-/// figure out what the environment is.
-///
-/// Generally the meaning of identifiers is broken everywhere.
-#[derive(Clone, PartialEq)]
-pub struct Env<S>(HashTrieMap<Id, Expr<S>>);
+#[derive(Clone)]
+pub struct Env<S>(HashTrieMap<Id, Thunk<S>>);
+
+#[derive(Debug, Clone)]
+pub struct Thunk<S> {
+    pub env: Env<S>,
+    pub term: Expr<S>,
+}
 
 impl<S: Debug> Debug for Env<S> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_list().entries(&self.0).finish()
+        let mut entries: Vec<(&Id, &Thunk<S>)> = self.0.iter().collect();
+        entries.sort_by_key(|(_id, thunk)| thunk.env.0.size());
+        f.debug_list()
+            .entries(entries.into_iter().map(|(id, thunk)| (id, &thunk.term)))
+            .finish()
     }
 }
 
@@ -32,21 +35,33 @@ impl<S> Env<S> {
         Env(HashTrieMap::new())
     }
 
-    pub fn get(&self, x: &Id) -> Option<&Expr<S>> {
+    pub fn get(&self, x: &Id) -> Option<&Thunk<S>> {
         self.0.get(x)
     }
 
-    pub fn with(&self, id: Id, term: Expr<S>) -> Env<S> {
+    pub fn with(&self, id: Id, term: Thunk<S>) -> Env<S> {
         Env(self.0.insert(id, term))
-    }
-
-    pub fn push(&mut self, id: Id, term: Expr<S>) {
-        self.0 = self.0.insert(id, term);
     }
 }
 
-impl<S> FromIterator<(Id, Expr<S>)> for Env<S> {
+impl<S: Clone> Env<S> {
+    pub fn push(&mut self, id: Id, term: Expr<S>) {
+        self.0 = self.0.insert(
+            id,
+            Thunk {
+                env: self.clone(),
+                term,
+            },
+        );
+    }
+}
+
+impl<S: Clone> FromIterator<(Id, Expr<S>)> for Env<S> {
     fn from_iter<T: IntoIterator<Item = (Id, Expr<S>)>>(iter: T) -> Self {
-        Env(iter.into_iter().collect())
+        let mut env = Env::new();
+        for (id, term) in iter {
+            env.push(id, term);
+        }
+        env
     }
 }
