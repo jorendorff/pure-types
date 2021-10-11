@@ -75,20 +75,11 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                     env,
                 };
                 let f_ty = self.check_expr(&f_thunk)?;
-                println!("it seems the type of {} is {}", f.clone(), f_ty.term);
                 if let ExprEnum::Pi(param, expected_arg_ty, body_ty_expr) = f_ty.term.inner() {
                     let actual_arg_ty: Thunk<S> = self.check_expr(&arg_thunk)?;
                     let expected_arg_ty: Expr<S> = expected_arg_ty.clone();
                     // XXX FIXME bug
                     if actual_arg_ty.term != expected_arg_ty {
-                        println!(
-                            "{}",
-                            TypeCheckError::ArgumentTypeMismatch(
-                                expr.term.clone(),
-                                expected_arg_ty.clone(),
-                                actual_arg_ty.term.clone(),
-                            )
-                        );
                         return Err(TypeCheckError::ArgumentTypeMismatch(
                             expr.term.clone(),
                             expected_arg_ty,
@@ -338,11 +329,10 @@ mod tests {
         let id_expr = lambda("t", sort(Type), lambda("x", var("t"), var("x")));
         let id_type = u
             .check_expr(&Thunk {
-                term: id_expr.clone(),
+                term: id_expr,
                 env: Env::new(),
             })
             .unwrap();
-        println!("The type of `{}` is `{}`", id_expr, id_type.term);
 
         // Π (t : *), Π (x : t), t
         assert_eq!(
