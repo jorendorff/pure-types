@@ -9,5 +9,5 @@ lalrpop_mod!(pub parser);
 pub mod pts;
 
 pub use ast::{Expr, Id, USort};
-pub use env::{Env, Thunk};
+pub use env::{Binding, Env, Thunk};
 pub use error::TypeCheckError;

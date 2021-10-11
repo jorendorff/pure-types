@@ -1,9 +1,6 @@
 //! Static environments.
 
-use std::{
-    fmt::{self, Debug, Formatter},
-    iter::FromIterator,
-};
+use std::fmt::{self, Debug, Formatter};
 
 use rpds::HashTrieMap;
 
@@ -11,7 +8,7 @@ use crate::{Expr, Id};
 
 /// A static environment, mapping identifiers to type-expressions.
 #[derive(Clone)]
-pub struct Env<S>(HashTrieMap<Id, Thunk<S>>);
+pub struct Env<S>(HashTrieMap<Id, Binding<S>>);
 
 #[derive(Debug, Clone)]
 pub struct Thunk<S> {
@@ -19,12 +16,36 @@ pub struct Thunk<S> {
     pub term: Expr<S>,
 }
 
+/// An axiom, definition, or parameter.
+///
+/// If we have `def foo : A := b;` then `foo` has type `A` and definition `b`.
+/// A function parameter has a type but no definition.
+#[derive(Debug, Clone)]
+pub struct Binding<S> {
+    /// Type of the binding.
+    pub ty: Thunk<S>,
+
+    /// Definition of the binding.
+    ///
+    /// Parameters often don't have a definition, as it's supplied at run time
+    /// by the caller. But in the case of a function application like `f 0`,
+    /// given `def f := λ i : nat . i + 1`, when trying to figure out if it's
+    /// definitionally equivalent to something else, we can reduce terms at
+    /// typecheck time, with the result that the binding `i` does contain the
+    /// definition `0`.
+    pub def: Option<Thunk<S>>,
+}
+
 impl<S: Debug> Debug for Env<S> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let mut entries: Vec<(&Id, &Thunk<S>)> = self.0.iter().collect();
-        entries.sort_by_key(|(_id, thunk)| thunk.env.0.size());
+        let mut entries: Vec<(&Id, &Binding<S>)> = self.0.iter().collect();
+        entries.sort_by_key(|(_id, binding)| binding.ty.env.0.size());
         f.debug_list()
-            .entries(entries.into_iter().map(|(id, thunk)| (id, &thunk.term)))
+            .entries(
+                entries
+                    .into_iter()
+                    .map(|(id, binding)| (id, &binding.ty.term)),
+            )
             .finish()
     }
 }
@@ -35,12 +56,12 @@ impl<S> Env<S> {
         Env(HashTrieMap::new())
     }
 
-    pub fn get(&self, x: &Id) -> Option<&Thunk<S>> {
+    pub fn get(&self, x: &Id) -> Option<&Binding<S>> {
         self.0.get(x)
     }
 
-    pub fn with(&self, id: Id, term: Thunk<S>) -> Env<S> {
-        Env(self.0.insert(id, term))
+    pub fn with(&self, id: Id, binding: Binding<S>) -> Env<S> {
+        Env(self.0.insert(id, binding))
     }
 }
 
@@ -48,20 +69,13 @@ impl<S: Clone> Env<S> {
     pub fn push(&mut self, id: Id, term: Expr<S>) {
         self.0 = self.0.insert(
             id,
-            Thunk {
-                env: self.clone(),
-                term,
+            Binding {
+                ty: Thunk {
+                    env: self.clone(),
+                    term,
+                },
+                def: None,
             },
         );
-    }
-}
-
-impl<S: Clone> FromIterator<(Id, Expr<S>)> for Env<S> {
-    fn from_iter<T: IntoIterator<Item = (Id, Expr<S>)>>(iter: T) -> Self {
-        let mut env = Env::new();
-        for (id, term) in iter {
-            env.push(id, term);
-        }
-        env
     }
 }

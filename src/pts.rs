@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     ast::{self, Def, ExprEnum},
-    Env, Expr, Thunk, TypeCheckError,
+    Binding, Env, Expr, Thunk, TypeCheckError,
 };
 
 pub struct PureTypeSystem<S> {
@@ -31,8 +31,8 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                 }
             }
             ExprEnum::Var(v) => {
-                if let Some(v_ty) = expr.env.get(v) {
-                    v_ty.clone()
+                if let Some(binding) = expr.env.get(v) {
+                    binding.ty.clone()
                 } else {
                     return Err(TypeCheckError::UndeclaredVar(v.clone()));
                 }
@@ -45,7 +45,13 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                 let param_ty_ty_thunk = self.check_expr(&param_ty_thunk)?;
                 let body_ty_thunk = Thunk {
                     term: body_ty.clone(),
-                    env: env.with(param.clone(), param_ty_thunk),
+                    env: env.with(
+                        param.clone(),
+                        Binding {
+                            ty: param_ty_thunk,
+                            def: None,
+                        },
+                    ),
                 };
                 let sort = self.check_pi_type(
                     param_ty_ty_thunk,
@@ -70,7 +76,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                 };
                 let f_ty = self.check_expr(&f_thunk)?;
                 println!("it seems the type of {} is {}", f.clone(), f_ty.term);
-                if let ExprEnum::Pi(x, expected_arg_ty, body_ty_expr) = f_ty.term.inner() {
+                if let ExprEnum::Pi(param, expected_arg_ty, body_ty_expr) = f_ty.term.inner() {
                     let actual_arg_ty: Thunk<S> = self.check_expr(&arg_thunk)?;
                     let expected_arg_ty: Expr<S> = expected_arg_ty.clone();
                     // XXX FIXME bug
@@ -91,7 +97,13 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                     }
                     Thunk {
                         term: body_ty_expr.clone(),
-                        env: f_ty.env.with(x.clone(), arg_thunk),
+                        env: f_ty.env.with(
+                            param.clone(),
+                            Binding {
+                                ty: actual_arg_ty,
+                                def: Some(arg_thunk),
+                            },
+                        ),
                     }
                 } else {
                     return Err(TypeCheckError::FunctionExpected(
@@ -108,7 +120,13 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
                 };
                 let param_ty_ty_thunk = self.check_expr(&param_ty_thunk)?;
 
-                let body_env = env.with(param.clone(), param_ty_thunk);
+                let body_env = env.with(
+                    param.clone(),
+                    Binding {
+                        ty: param_ty_thunk,
+                        def: None,
+                    },
+                );
                 let body_thunk = Thunk {
                     env: body_env,
                     term: body.clone(),
@@ -141,9 +159,20 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         })
     }
 
+    /// This is used when we need to check the sorts of a function type.
+    ///
+    /// Suppose we have `def m : Type -> Kind;`. To find out if this function
+    /// type is valid, we must first determine whether `Type` and `Kind` are
+    /// definitionally equivalent to some statically known sort. This function
+    /// is called once for each expression; it determines that, for example,
+    /// `Type` is bound to `ast::sort(Type)`.
     pub fn thunk_as_sort(&self, thunk: Thunk<S>) -> Option<S> {
         match thunk.term.inner() {
             ExprEnum::ConstSort(s) => Some(s.clone()),
+            ExprEnum::Var(id) => match thunk.env.get(id) {
+                Some(Binding { def: Some(def), .. }) => self.thunk_as_sort(def.clone()),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -183,31 +212,40 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
     ) -> Result<Env<S>, TypeCheckError<S>> {
         let mut env = env.clone();
         for def in program {
-            let ty = if let Some(defined_ty) = def.ty {
+            let ty = if let Some(defined_ty) = &def.ty {
                 // There's a defined type; type-check to make sure it's not nonsense.
                 self.check_expr(&Thunk {
                     env: env.clone(),
                     term: defined_ty.clone(),
                 })?;
 
-                if let Some(term) = def.term {
+                if let Some(term) = &def.term {
                     let env = env.clone();
+                    let term = term.clone();
                     let actual_ty = self.check_expr(&Thunk { env, term })?;
-                    assert_eq!(actual_ty.term, defined_ty); // TODO unify
+                    assert_eq!(actual_ty.term, *defined_ty); // TODO unify
                     actual_ty
                 } else {
                     // XXX hopeless env confusion
                     Thunk {
-                        term: defined_ty,
+                        term: defined_ty.clone(),
                         env: env.clone(),
                     }
                 }
             } else {
                 let env = env.clone();
-                let term = def.term.expect("def must have a term or type");
+                let term = def
+                    .term
+                    .as_ref()
+                    .expect("def must have a term or type")
+                    .clone();
                 self.check_expr(&Thunk { env, term })?
             };
-            env = env.with(def.id, ty);
+            let def_thunk = def.term.map(|term| Thunk {
+                term,
+                env: env.clone(),
+            });
+            env = env.with(def.id, Binding { def: def_thunk, ty });
         }
         Ok(env)
     }
@@ -242,12 +280,25 @@ mod tests {
 
     #[allow(dead_code)]
     fn u_env() -> Env<USort> {
-        vec![
-            (Id::from("Type"), ast::sort(Type)),
-            (Id::from("Kind"), ast::sort(Kind)),
-        ]
-        .into_iter()
-        .collect()
+        let sort = |s| Thunk {
+            env: Env::new(),
+            term: ast::sort(s),
+        };
+        Env::new()
+            .with(
+                Id::from("Type"),
+                Binding {
+                    def: Some(sort(Type)),
+                    ty: sort(Kind),
+                },
+            )
+            .with(
+                Id::from("Kind"),
+                Binding {
+                    def: Some(sort(Kind)),
+                    ty: sort(Triangle),
+                },
+            )
     }
 
     fn parse(s: &'static str) -> Expr<USort> {
@@ -302,19 +353,12 @@ mod tests {
 
     #[test]
     fn test_girard() {
-        let expr = parse("λ (k : Kind) . λ (α : k -> k) . λ (β : k) . (α (α β))");
+        let term = parse("λ (k : Kind) . λ (α : k -> k) . λ (β : k) . (α (α β))");
         let ty = parse("Π (k : Kind) . Π (α : k -> k) . Π (β : k) . k");
 
         let u = system_u();
-        assert_eq!(
-            u.check_expr(&Thunk {
-                term: expr,
-                env: Env::new()
-            })
-            .unwrap()
-            .term,
-            ty
-        );
+        let env = u_env();
+        assert_eq!(u.check_expr(&Thunk { term, env }).unwrap().term, ty);
     }
 
     #[test]
@@ -336,18 +380,18 @@ mod tests {
             )
             .unwrap();
 
-        let get = |s| &actual_env.get(&Id::from(s)).unwrap().term;
+        let get = |s| &actual_env.get(&Id::from(s)).unwrap().ty.term;
 
-        assert_eq!(get("true"), &sort(Type));
+        assert_eq!(get("true"), &var("Type"));
         assert_eq!(get("true_intro"), &var("true"));
         assert_eq!(
             get("tx"),
-            &pi("p", sort(Type), arrow(var("p"), var("true"))),
+            &pi("p", var("Type"), arrow(var("p"), var("true"))),
         );
-        assert_eq!(get("false"), &sort(Type));
+        assert_eq!(get("false"), &var("Type"));
         assert_eq!(
             get("false_elim"),
-            &pi("p", sort(Type), arrow(var("false"), var("p"))),
+            &pi("p", var("Type"), arrow(var("false"), var("p"))),
         );
     }
 
@@ -359,10 +403,11 @@ mod tests {
 
     #[test]
     fn no_dependent_types_in_system_u() {
+        let u = system_u();
+
         // The `eq` type takes a type and two values as parameters. This is possible
         // in System U, but the return type would have to be another value, not
         // a type.
-        let u = system_u();
         let program = parse_program("axiom eq : Π (t : Type) . t -> t -> Type;");
         assert!(u.check_program(&u_env(), program).is_err());
 

@@ -76,11 +76,7 @@ pub trait Sort {
 impl<S: Sort> Expr<S> {
     pub(crate) fn from_cst(expr: cst::Expr) -> Self {
         match *expr.0 {
-            cst::ExprEnum::Var(id) => match &*id {
-                "Type" => sort(S::type_sort()),
-                "Kind" => sort(S::kind_sort()),
-                _ => var(id),
-            },
+            cst::ExprEnum::Var(id) => var(id),
             cst::ExprEnum::Pi(binders, body) => desugar_binders(ExprEnum::Pi, binders, body),
             cst::ExprEnum::Arrow(arg_ty, ret_ty) => {
                 arrow(Self::from_cst(arg_ty), Self::from_cst(ret_ty))
