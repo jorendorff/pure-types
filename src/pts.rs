@@ -6,11 +6,9 @@ use std::{
     hash::Hash,
 };
 
-use rpds::HashTrieMap;
-
 use crate::{
     ast::{self, Def, ExprEnum},
-    Binding, Env, Expr, Id, Thunk, TypeCheckError,
+    Binding, Env, Expr, Thunk, TypeCheckError,
 };
 
 #[derive(Clone)]
@@ -26,13 +24,16 @@ struct Context<S> {
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
-    pub fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
-        let mut cx = Context {
+    fn new_context(&self) -> Context<S> {
+        Context {
             system: self.clone(),
             blanks: vec![],
             next_undefined: 0,
-        };
-        cx.check_expr(expr)
+        }
+    }
+
+    pub fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
+        self.new_context().check_expr(expr)
     }
 
     pub fn check_program(
@@ -40,12 +41,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         env: &Env<S>,
         program: Vec<Def<S>>,
     ) -> Result<Env<S>, TypeCheckError<S>> {
-        let mut cx = Context {
-            system: self.clone(),
-            blanks: vec![],
-            next_undefined: 0,
-        };
-        cx.check_program(env, program)
+        self.new_context().check_program(env, program)
     }
 }
 
@@ -85,7 +81,6 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         &mut self,
         mut actual: Thunk<S>,
         mut expected: Thunk<S>,
-        env_map: HashTrieMap<Id, Id>,
     ) -> Result<(), TypeCheckError<S>> {
         use ExprEnum::*;
 
@@ -103,13 +98,12 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
             (Blank(i), _) => self.blanks[*i] = Some(expected.clone()),
             (_, Blank(j)) => self.blanks[*j] = Some(actual.clone()),
             (Var(x), _) => {
-                let x = env_map.get(x).unwrap_or(x);
                 let defn = actual.env.get(x).unwrap().def.clone();
-                self.unify(defn, expected, env_map)?;
+                self.unify(defn, expected)?;
             }
             (_, Var(y)) => {
                 let defn = expected.env.get(y).unwrap().def.clone();
-                self.unify(actual, defn, env_map)?;
+                self.unify(actual, defn)?;
             }
             (Undefined(u), Undefined(v)) => {
                 // XXX TODO improve error message, ew
@@ -132,42 +126,35 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                         term: q_ty.clone(),
                         env: expected.env.clone(),
                     },
-                    env_map.clone(),
                 )?;
 
-                let param_ty = Thunk {
-                    term: q_ty.clone(),
-                    env: expected.env.clone(),
-                };
-
-                // Note the use of `q` on the "actual" side below is
-                // deliberate. We're making the environments look alike, using
-                // env_map to reinterpret actual terms.
                 let param_binding = Binding {
                     def: self.undefined(),
-                    ty: param_ty,
+                    ty: Thunk {
+                        term: q_ty.clone(),
+                        env: expected.env.clone(),
+                    },
                 };
                 self.unify(
                     Thunk {
                         term: a.clone(),
-                        env: actual.env.with(q.clone(), param_binding.clone()),
+                        env: actual.env.with(p.clone(), param_binding.clone()),
                     },
                     Thunk {
                         term: b.clone(),
                         env: expected.env.with(q.clone(), param_binding),
                     },
-                    env_map.insert(p.clone(), q.clone()),
                 )?;
             }
             // XXX TODO: handle unifying `foo bar = t` where `foo` is a
             // variable defined as a lambda
             (Apply(f, _), _) if f.is_lambda() => {
                 // Reduce `actual` and retry.
-                self.unify(self.beta_reduce(actual), expected, env_map)?;
+                self.unify(self.beta_reduce(actual), expected)?;
             }
             (_, Apply(g, _)) if g.is_lambda() => {
                 // Reduce `expected` and retry.
-                self.unify(actual, self.beta_reduce(expected), env_map)?;
+                self.unify(actual, self.beta_reduce(expected))?;
             }
             (Apply(f, a), Apply(g, b)) => {
                 // Of course in general it's not possible to determine whether f x = g y,
@@ -181,7 +168,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     term: g.clone(),
                     env: expected.env.clone(),
                 };
-                self.unify(f, g, env_map.clone())?;
+                self.unify(f, g)?;
                 let a = Thunk {
                     term: a.clone(),
                     env: actual.env.clone(),
@@ -190,7 +177,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     term: b.clone(),
                     env: expected.env.clone(),
                 };
-                self.unify(a, b, env_map)?;
+                self.unify(a, b)?;
             }
             (_, _) => return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term)),
         }
@@ -281,11 +268,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                         term: expected_arg_ty.clone(),
                         env: f_ty.env.clone(),
                     };
-                    if let Err(err) = self.unify(
-                        actual_arg_ty.clone(),
-                        expected_arg_ty.clone(),
-                        HashTrieMap::new(),
-                    ) {
+                    if let Err(err) = self.unify(actual_arg_ty.clone(), expected_arg_ty.clone()) {
                         return Err(TypeCheckError::ArgumentTypeMismatch(
                             expr.term.clone(),
                             expected_arg_ty.term,
@@ -424,11 +407,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                         term: term.clone(),
                     };
                     let actual_ty = self.check_expr(&actual_thunk)?;
-                    if let Err(err) = self.unify(
-                        actual_ty.clone(),
-                        defined_ty_thunk.clone(),
-                        HashTrieMap::new(),
-                    ) {
+                    if let Err(err) = self.unify(actual_ty.clone(), defined_ty_thunk.clone()) {
                         return Err(TypeCheckError::DefinedTypeMismatch(
                             def.id,
                             defined_ty_thunk.term,
@@ -621,12 +600,31 @@ mod tests {
         }
     }
 
+    #[track_caller]
     fn assert_checks_in_system_u(program: &'static str) {
         let u = system_u();
         let base_env = u_env();
         if let Err(err) = u.check_program(&base_env, parse_program(program)) {
             dump(err);
             panic!("failed to type-check program");
+        }
+    }
+
+    #[track_caller]
+    fn assert_unify_in_system_u(actual: &'static str, expected: &'static str) {
+        let u = system_u();
+        let base_env = u_env();
+        let actual = Thunk {
+            term: parse(actual),
+            env: base_env.clone(),
+        };
+        let expected = Thunk {
+            term: parse(expected),
+            env: base_env,
+        };
+        if let Err(err) = u.new_context().unify(actual, expected) {
+            dump(err);
+            panic!("failed to unify");
         }
     }
 
@@ -652,6 +650,17 @@ mod tests {
               Π (a b c : Type) . (a -> b) -> (b -> c) -> a -> c :=
                 λ (a b c : Type) (ab : a -> b) (bc : b -> c) (h : a) . bc (ab h);
             ",
+        );
+    }
+
+    #[test]
+    fn test_unify() {
+        // simple alpha-equivalence
+        assert_unify_in_system_u("λ x : Type . x -> x", "λ y : Type . y -> y");
+        // beta-equivalence
+        assert_unify_in_system_u(
+            "λ t : Type . λ v : t . (λ x : t . x) v",
+            "λ t : Type . λ v : t . v",
         );
     }
 
