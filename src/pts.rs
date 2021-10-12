@@ -169,7 +169,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     env,
                 }
             }
-            ExprEnum::Blank => {
+            ExprEnum::Blank(_) => {
                 return Err(TypeCheckError::Blank);
             }
         })

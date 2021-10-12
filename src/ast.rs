@@ -28,7 +28,7 @@ pub(crate) enum ExprEnum<S> {
     Pi(Id, Expr<S>, Expr<S>),
     Apply(Expr<S>, Expr<S>),
     Lambda(Id, Expr<S>, Expr<S>),
-    Blank,
+    Blank(usize),
 }
 
 impl<S: Display> Display for Expr<S> {
@@ -63,7 +63,7 @@ impl<S: Display> Display for ExprEnum<S> {
                 }
             }
             ExprEnum::Lambda(p, p_ty, body) => write!(f, "λ ({} : {}) . {}", p, p_ty, body),
-            ExprEnum::Blank => write!(f, "_"),
+            ExprEnum::Blank(n) => write!(f, "_{}", n),
         }
     }
 }
@@ -80,7 +80,7 @@ impl<S> Expr<S> {
                 desugar_binders(ExprEnum::Lambda, binders, body)
             }
             cst::ExprEnum::Apply(fun, arg) => apply(Self::from_cst(fun), Self::from_cst(arg)),
-            cst::ExprEnum::Blank => blank(),
+            cst::ExprEnum::Blank => blank(0),
         }
     }
 
@@ -99,7 +99,7 @@ fn desugar_binders<S>(
         .flat_map(|binder| {
             let ty = match binder.ty {
                 Some(ty) => Expr::from_cst(ty),
-                None => blank(),
+                None => blank(0),
             };
             binder.ids.into_iter().map(move |id| (id, ty.clone()))
         })
@@ -174,14 +174,14 @@ pub fn sort<S>(s: S) -> Expr<S> {
     Expr(Rc::new(ExprEnum::ConstSort(s)))
 }
 
-pub fn blank<S>() -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Blank))
+pub fn blank<S>(index: usize) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Blank(index)))
 }
 
 pub fn var_or_blank<S>(x: impl Into<Id>) -> Expr<S> {
     let x = x.into();
     if x == Id::from("_") {
-        blank()
+        blank(0)
     } else {
         var(x)
     }
