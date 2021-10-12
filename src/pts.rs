@@ -6,9 +6,11 @@ use std::{
     hash::Hash,
 };
 
+use rpds::HashTrieMap;
+
 use crate::{
     ast::{self, Def, ExprEnum},
-    Binding, Env, Expr, Thunk, TypeCheckError,
+    Binding, Env, Expr, Id, Thunk, TypeCheckError,
 };
 
 #[derive(Clone)]
@@ -19,14 +21,16 @@ pub struct PureTypeSystem<S> {
 
 struct Context<S> {
     system: PureTypeSystem<S>,
+    blanks: Vec<Option<Thunk<S>>>,
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
     pub fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
-        Context {
+        let cx = Context {
             system: self.clone(),
-        }
-        .check_expr(expr)
+            blanks: vec![],
+        };
+        cx.check_expr(expr)
     }
 
     pub fn check_program(
@@ -34,14 +38,179 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         env: &Env<S>,
         program: Vec<Def<S>>,
     ) -> Result<Env<S>, TypeCheckError<S>> {
-        Context {
+        let cx = Context {
             system: self.clone(),
-        }
-        .check_program(env, program)
+            blanks: vec![],
+        };
+        cx.check_program(env, program)
     }
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
+    fn lookup_blank(&mut self, mut i: usize) -> Thunk<S> {
+        loop {
+            match &mut self.blanks[i] {
+                Some(expr) => {
+                    if let ExprEnum::Blank(j) = expr.term.inner() {
+                        i = *j;
+                    } else {
+                        // TODO shorten chain
+                        return expr.clone();
+                    }
+                }
+                None => {
+                    // TODO shorten chain
+                    return Thunk {
+                        term: ast::blank(i),
+                        env: Env::new(),
+                    };
+                }
+            }
+        }
+    }
+
+    fn unify(
+        &mut self,
+        mut actual: Thunk<S>,
+        mut expected: Thunk<S>,
+        env_map: HashTrieMap<Id, Id>,
+    ) -> Result<(), TypeCheckError<S>> {
+        use ExprEnum::*;
+
+        if let Blank(i) = actual.term.inner() {
+            actual = self.lookup_blank(*i);
+        }
+        if let Blank(j) = expected.term.inner() {
+            expected = self.lookup_blank(*j);
+        }
+        // Now if either thunk is Blank, we really know nothing about its structure.
+
+        match (actual.term.inner(), expected.term.inner()) {
+            (Blank(i), _) => self.blanks[*i] = Some(expected.clone()),
+            (_, Blank(j)) => self.blanks[*j] = Some(actual.clone()),
+            (Var(x), Var(y)) => {
+                let x = env_map.get(x).unwrap_or(x);
+                if *x != *y {
+                    return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term));
+                } else {
+                    todo!("unifying variables");
+                }
+            }
+            (Var(x), _) => {
+                let x = env_map.get(x).unwrap_or(x);
+                match &actual.env.get(x).unwrap().def {
+                    Some(defn) => self.unify(defn.clone(), expected, env_map)?,
+                    None => return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term)),
+                }
+            }
+            (_, Var(y)) => match &expected.env.get(y).unwrap().def {
+                Some(defn) => self.unify(actual, defn.clone(), env_map)?,
+                None => return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term)),
+            },
+            (ConstSort(u), ConstSort(v)) => {
+                if u != v {
+                    return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term));
+                }
+            }
+            (Lambda(p, p_ty, a), Lambda(q, q_ty, b)) | (Pi(p, p_ty, a), Pi(q, q_ty, b)) => {
+                self.unify(
+                    Thunk {
+                        term: p_ty.clone(),
+                        env: actual.env.clone(),
+                    },
+                    Thunk {
+                        term: q_ty.clone(),
+                        env: expected.env.clone(),
+                    },
+                    env_map.clone(),
+                )?;
+
+                let param_ty = Thunk {
+                    term: q_ty.clone(),
+                    env: expected.env.clone(),
+                };
+
+                // Note the use of `q` on the "actual" side below is
+                // deliberate. We're making the environments look alike, using
+                // env_map to reinterpret actual terms.
+                self.unify(
+                    Thunk {
+                        term: a.clone(),
+                        env: actual.env.with(
+                            q.clone(),
+                            Binding {
+                                def: None,
+                                ty: param_ty.clone(),
+                            },
+                        ),
+                    },
+                    Thunk {
+                        term: b.clone(),
+                        env: expected.env.with(
+                            q.clone(),
+                            Binding {
+                                def: None,
+                                ty: param_ty,
+                            },
+                        ),
+                    },
+                    env_map.insert(p.clone(), q.clone()),
+                )?;
+            }
+            (Apply(f, _), _) if f.is_lambda() => {
+                self.unify(self.beta_reduce(actual), expected, env_map)?;
+            }
+            (_, Apply(g, _)) if g.is_lambda() => {
+                // Reduce `expected` and retry.
+                self.unify(actual, self.beta_reduce(expected), env_map)?;
+            }
+            (Apply(f, a), Apply(g, b)) => {
+                // Of course in general it's not possible to determine whether f x = g y,
+                // but for definitional equivalence it's
+                let f = Thunk {
+                    term: f.clone(),
+                    env: actual.env.clone(),
+                };
+                let g = Thunk {
+                    term: g.clone(),
+                    env: expected.env.clone(),
+                };
+                self.unify(f, g, env_map.clone())?;
+                let a = Thunk {
+                    term: a.clone(),
+                    env: actual.env.clone(),
+                };
+                let b = Thunk {
+                    term: b.clone(),
+                    env: expected.env.clone(),
+                };
+                self.unify(a, b, env_map)?;
+            }
+            (_, _) => return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term)),
+        }
+
+        Ok(())
+    }
+
+    fn beta_reduce(&self, app: Thunk<S>) -> Thunk<S> {
+        let (fun, arg) = app.term.as_apply();
+        let (p, p_ty, body) = fun.as_lambda();
+        let param_binding = Binding {
+            def: Some(Thunk {
+                term: arg,
+                env: app.env.clone(),
+            }),
+            ty: Thunk {
+                term: p_ty,
+                env: app.env.clone(),
+            },
+        };
+        Thunk {
+            term: body,
+            env: app.env.with(p, param_binding),
+        }
+    }
+
     fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
         let env = expr.env.clone();
         Ok(match expr.term.inner() {

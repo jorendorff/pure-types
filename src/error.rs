@@ -39,6 +39,9 @@ pub enum TypeCheckError<S> {
     #[error("argument is the wrong type in `{0}`: expected `{1}`, got `{2}`")]
     ArgumentTypeMismatch(Expr<S>, Expr<S>, Expr<S>),
 
+    #[error("type mismatch: expected `{0}`, got `{1}`")]
+    UnifyMismatch(Expr<S>, Expr<S>),
+
     #[error("can't type-check expressions containing blanks")]
     Blank,
 }
