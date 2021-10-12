@@ -4,7 +4,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use rpds::HashTrieMap;
 
-use crate::{Expr, Id};
+use crate::{ast, Expr, Id};
 
 /// A static environment, mapping identifiers to type-expressions.
 #[derive(Clone)]
@@ -27,13 +27,14 @@ pub struct Binding<S> {
 
     /// Definition of the binding.
     ///
-    /// Parameters often don't have a definition, as it's supplied at run time
-    /// by the caller. But in the case of a function application like `f 0`,
-    /// given `def f := λ i : nat . i + 1`, when trying to figure out if it's
-    /// definitionally equivalent to something else, we can reduce terms at
-    /// typecheck time, with the result that the binding `i` does contain the
-    /// definition `0`.
-    pub def: Option<Thunk<S>>,
+    /// In the case of a function application like `f 0`, given `def f := λ i :
+    /// nat . i + 1`, when trying to figure out if it's definitionally
+    /// equivalent to something else, we can reduce terms at typecheck time,
+    /// with the result that the binding `i` contains the definition `0`.
+    ///
+    /// Otherwise, we generally don't know what's in a parameter binding,
+    /// so the `def` will be `Undefined`.
+    pub def: Thunk<S>,
 }
 
 impl<S: Debug> Debug for Env<S> {
@@ -62,20 +63,5 @@ impl<S> Env<S> {
 
     pub fn with(&self, id: Id, binding: Binding<S>) -> Env<S> {
         Env(self.0.insert(id, binding))
-    }
-}
-
-impl<S: Clone> Env<S> {
-    pub fn push(&mut self, id: Id, term: Expr<S>) {
-        self.0 = self.0.insert(
-            id,
-            Binding {
-                ty: Thunk {
-                    env: self.clone(),
-                    term,
-                },
-                def: None,
-            },
-        );
     }
 }

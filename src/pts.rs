@@ -22,6 +22,7 @@ pub struct PureTypeSystem<S> {
 struct Context<S> {
     system: PureTypeSystem<S>,
     blanks: Vec<Option<Thunk<S>>>,
+    next_undefined: usize,
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
@@ -29,6 +30,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         let mut cx = Context {
             system: self.clone(),
             blanks: vec![],
+            next_undefined: 0,
         };
         cx.check_expr(expr)
     }
@@ -41,12 +43,22 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         let mut cx = Context {
             system: self.clone(),
             blanks: vec![],
+            next_undefined: 0,
         };
         cx.check_program(env, program)
     }
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
+    fn undefined(&mut self) -> Thunk<S> {
+        let id = self.next_undefined;
+        self.next_undefined += 1;
+        Thunk {
+            term: ast::undefined(id),
+            env: Env::new(),
+        }
+    }
+
     fn lookup_blank(&mut self, mut i: usize) -> Thunk<S> {
         loop {
             match &mut self.blanks[i] {
@@ -83,31 +95,28 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         if let Blank(j) = expected.term.inner() {
             expected = self.lookup_blank(*j);
         }
-        // Now if either thunk is Blank, we really know nothing about its structure.
+
+        // If either thunk is still Blank, we really know nothing about its
+        // structure.
 
         match (actual.term.inner(), expected.term.inner()) {
             (Blank(i), _) => self.blanks[*i] = Some(expected.clone()),
             (_, Blank(j)) => self.blanks[*j] = Some(actual.clone()),
-            (Var(x), Var(y)) => {
-                let x = env_map.get(x).unwrap_or(x);
-                if *x != *y {
-                    return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term));
-                } else {
-                    // XXX BUG - should succeed if these names refer to the same binding
-                    // or if they have definitionally equivalent values.
-                }
-            }
             (Var(x), _) => {
                 let x = env_map.get(x).unwrap_or(x);
-                match &actual.env.get(x).unwrap().def {
-                    Some(defn) => self.unify(defn.clone(), expected, env_map)?,
-                    None => return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term)),
+                let defn = actual.env.get(x).unwrap().def.clone();
+                self.unify(defn, expected, env_map)?;
+            }
+            (_, Var(y)) => {
+                let defn = expected.env.get(y).unwrap().def.clone();
+                self.unify(actual, defn.clone(), env_map)?;
+            }
+            (Undefined(u), Undefined(v)) => {
+                // XXX TODO improve error message, ew
+                if u != v {
+                    return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term));
                 }
             }
-            (_, Var(y)) => match &expected.env.get(y).unwrap().def {
-                Some(defn) => self.unify(actual, defn.clone(), env_map)?,
-                None => return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term)),
-            },
             (ConstSort(u), ConstSort(v)) => {
                 if u != v {
                     return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term));
@@ -134,26 +143,18 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                 // Note the use of `q` on the "actual" side below is
                 // deliberate. We're making the environments look alike, using
                 // env_map to reinterpret actual terms.
+                let param_binding = Binding {
+                    def: self.undefined(),
+                    ty: param_ty,
+                };
                 self.unify(
                     Thunk {
                         term: a.clone(),
-                        env: actual.env.with(
-                            q.clone(),
-                            Binding {
-                                def: None,
-                                ty: param_ty.clone(),
-                            },
-                        ),
+                        env: actual.env.with(q.clone(), param_binding.clone()),
                     },
                     Thunk {
                         term: b.clone(),
-                        env: expected.env.with(
-                            q.clone(),
-                            Binding {
-                                def: None,
-                                ty: param_ty,
-                            },
-                        ),
+                        env: expected.env.with(q.clone(), param_binding),
                     },
                     env_map.insert(p.clone(), q.clone()),
                 )?;
@@ -201,10 +202,10 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         let (fun, arg) = app.term.as_apply();
         let (p, p_ty, body) = fun.as_lambda();
         let param_binding = Binding {
-            def: Some(Thunk {
+            def: Thunk {
                 term: arg,
                 env: app.env.clone(),
-            }),
+            },
             ty: Thunk {
                 term: p_ty,
                 env: app.env.clone(),
@@ -248,7 +249,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                         param.clone(),
                         Binding {
                             ty: param_ty_thunk,
-                            def: None,
+                            def: self.undefined(),
                         },
                     ),
                 };
@@ -298,7 +299,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                             param.clone(),
                             Binding {
                                 ty: actual_arg_ty,
-                                def: Some(arg_thunk),
+                                def: arg_thunk,
                             },
                         ),
                     }
@@ -321,7 +322,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     param.clone(),
                     Binding {
                         ty: param_ty_thunk,
-                        def: None,
+                        def: self.undefined(),
                     },
                 );
                 let body_thunk = Thunk {
@@ -350,7 +351,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     env,
                 }
             }
-            ExprEnum::Blank(_) => {
+            ExprEnum::Blank(_) | ExprEnum::Undefined(_) => {
                 return Err(TypeCheckError::Blank);
             }
         })
@@ -367,7 +368,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         match thunk.term.inner() {
             ExprEnum::ConstSort(s) => Some(s.clone()),
             ExprEnum::Var(id) => match thunk.env.get(id) {
-                Some(Binding { def: Some(def), .. }) => self.thunk_as_sort(def.clone()),
+                Some(Binding { def, .. }) => self.thunk_as_sort(def.clone()),
                 _ => None,
             },
             _ => None,
@@ -454,10 +455,13 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     .clone();
                 self.check_expr(&Thunk { env, term })?
             };
-            let def_thunk = def.term.map(|term| Thunk {
-                term,
-                env: env.clone(),
-            });
+            let def_thunk = match def.term {
+                Some(term) => Thunk {
+                    term,
+                    env: env.clone(),
+                },
+                None => self.undefined(),
+            };
             env = env.with(def.id, Binding { def: def_thunk, ty });
         }
         Ok(env)
@@ -503,14 +507,14 @@ mod tests {
             .with(
                 Id::from("Type"),
                 Binding {
-                    def: Some(sort(Type)),
+                    def: sort(Type),
                     ty: sort(Kind),
                 },
             )
             .with(
                 Id::from("Kind"),
                 Binding {
-                    def: Some(sort(Kind)),
+                    def: sort(Kind),
                     ty: sort(Triangle),
                 },
             )
@@ -584,12 +588,12 @@ mod tests {
                 &base_env,
                 parse_program(
                     "
-                axiom true : Type;
-                axiom true_intro : true;
-                def tx : Π (p : Type) . p -> true := λ (p : Type) . λ (_ : p) . true_intro;
-                axiom false : Type;
-                axiom false_elim : Π (p : Type) . false -> p;
-                ",
+                    axiom true : Type;
+                    axiom true_intro : true;
+                    def tx : Π (p : Type) . p -> true := λ (p : Type) . λ (_ : p) . true_intro;
+                    axiom false : Type;
+                    axiom false_elim : Π (p : Type) . false -> p;
+                    ",
                 ),
             )
             .unwrap();
@@ -645,7 +649,7 @@ mod tests {
         assert_checks_in_system_u(
             "
             def imp_trans :
-              Π (a b c : Type) (ab : a -> b) (bc : b -> c) (h : a) . c :=
+              Π (a b c : Type) . (a -> b) -> (b -> c) -> a -> c :=
                 λ (a b c : Type) (ab : a -> b) (bc : b -> c) (h : a) . bc (ab h);
             ",
         );

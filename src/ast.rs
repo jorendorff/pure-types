@@ -28,7 +28,13 @@ pub(crate) enum ExprEnum<S> {
     Pi(Id, Expr<S>, Expr<S>),
     Apply(Expr<S>, Expr<S>),
     Lambda(Id, Expr<S>, Expr<S>),
+
+    /// A placeholder.
     Blank(usize),
+
+    /// Used for bindings that are not defined as equivalent to particular
+    /// expressions, like lambda bindings and axioms.
+    Undefined(usize),
 }
 
 impl<S: Display> Display for Expr<S> {
@@ -63,7 +69,8 @@ impl<S: Display> Display for ExprEnum<S> {
                 }
             }
             ExprEnum::Lambda(p, p_ty, body) => write!(f, "λ ({} : {}) . {}", p, p_ty, body),
-            ExprEnum::Blank(n) => write!(f, "_{}", n),
+            ExprEnum::Blank(n) => write!(f, "#_{}", n),
+            ExprEnum::Undefined(n) => write!(f, "#undef{}", n),
         }
     }
 }
@@ -199,6 +206,10 @@ pub fn sort<S>(s: S) -> Expr<S> {
 
 pub fn blank<S>(index: usize) -> Expr<S> {
     Expr(Rc::new(ExprEnum::Blank(index)))
+}
+
+pub fn undefined<S>(undefined_id: usize) -> Expr<S> {
+    Expr(Rc::new(ExprEnum::Undefined(undefined_id)))
 }
 
 pub fn var_or_blank<S>(x: impl Into<Id>) -> Expr<S> {
