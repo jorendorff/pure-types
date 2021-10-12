@@ -109,41 +109,6 @@ fn desugar_binders<S>(
         })
 }
 
-impl<S: Clone> Expr<S> {
-    pub fn subst(&self, x: &Id, y: &Expr<S>) -> Expr<S> {
-        match self.inner() {
-            ExprEnum::ConstSort(s) => sort(s.clone()),
-            ExprEnum::Var(v) => {
-                if *v == *x {
-                    y.clone()
-                } else {
-                    self.clone()
-                }
-            }
-            ExprEnum::Pi(v, v_ty, body) => pi(
-                v.clone(),
-                v_ty.subst(x, y),
-                if *v == *x {
-                    body.clone()
-                } else {
-                    body.subst(x, y)
-                },
-            ),
-            ExprEnum::Apply(f, arg) => apply(f.subst(x, y), arg.subst(x, y)),
-            ExprEnum::Lambda(v, v_ty, body) => lambda(
-                v.clone(),
-                v_ty.subst(x, y),
-                if *v == *x {
-                    body.clone()
-                } else {
-                    body.subst(x, y)
-                },
-            ),
-            ExprEnum::Blank => self.clone(),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Def<S> {
     pub id: Id,
