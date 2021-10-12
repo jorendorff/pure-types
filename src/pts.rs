@@ -11,17 +11,42 @@ use crate::{
     Binding, Env, Expr, Thunk, TypeCheckError,
 };
 
+#[derive(Clone)]
 pub struct PureTypeSystem<S> {
     pub axioms: HashMap<S, S>,
     pub rules: HashMap<(S, S), S>,
 }
 
+struct Context<S> {
+    system: PureTypeSystem<S>,
+}
+
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
     pub fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
+        Context {
+            system: self.clone(),
+        }
+        .check_expr(expr)
+    }
+
+    pub fn check_program(
+        &self,
+        env: &Env<S>,
+        program: Vec<Def<S>>,
+    ) -> Result<Env<S>, TypeCheckError<S>> {
+        Context {
+            system: self.clone(),
+        }
+        .check_program(env, program)
+    }
+}
+
+impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
+    fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
         let env = expr.env.clone();
         Ok(match expr.term.inner() {
             ExprEnum::ConstSort(s) => {
-                if let Some(meta) = self.axioms.get(s) {
+                if let Some(meta) = self.system.axioms.get(s) {
                     Thunk {
                         term: ast::sort(meta.clone()),
                         env,
@@ -157,7 +182,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
     /// definitionally equivalent to some statically known sort. This function
     /// is called once for each expression; it determines that, for example,
     /// `Type` is bound to `ast::sort(Type)`.
-    pub fn thunk_as_sort(&self, thunk: Thunk<S>) -> Option<S> {
+    fn thunk_as_sort(&self, thunk: Thunk<S>) -> Option<S> {
         match thunk.term.inner() {
             ExprEnum::ConstSort(s) => Some(s.clone()),
             ExprEnum::Var(id) => match thunk.env.get(id) {
@@ -168,7 +193,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         }
     }
 
-    pub fn check_pi_type(
+    fn check_pi_type(
         &self,
         param_ty_ty_thunk: Thunk<S>,
         body_ty_thunk: Thunk<S>,
@@ -185,18 +210,18 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
             Some(sort) => sort,
             None => return Err(return_error()),
         };
-        if let Some(sort) = self.rules.get(&(param_sort.clone(), body_sort.clone())) {
+        if let Some(sort) = self
+            .system
+            .rules
+            .get(&(param_sort.clone(), body_sort.clone()))
+        {
             Ok(sort.clone())
         } else {
             Err(sort_error(param_sort, body_sort))
         }
     }
 
-    //pub fn check_sort() -> Result<S, TypeCheckError<S>> {
-    //
-    //}
-
-    pub fn check_program(
+    fn check_program(
         &self,
         env: &Env<S>,
         program: Vec<Def<S>>,
