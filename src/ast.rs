@@ -68,12 +68,7 @@ impl<S: Display> Display for ExprEnum<S> {
     }
 }
 
-pub trait Sort {
-    fn type_sort() -> Self;
-    fn kind_sort() -> Self;
-}
-
-impl<S: Sort> Expr<S> {
+impl<S> Expr<S> {
     pub(crate) fn from_cst(expr: cst::Expr) -> Self {
         match *expr.0 {
             cst::ExprEnum::Var(id) => var(id),
@@ -88,15 +83,13 @@ impl<S: Sort> Expr<S> {
             cst::ExprEnum::Blank => blank(),
         }
     }
-}
 
-impl<S> Expr<S> {
     pub(crate) fn inner(&self) -> &ExprEnum<S> {
         &self.0
     }
 }
 
-fn desugar_binders<S: Sort>(
+fn desugar_binders<S>(
     construct: fn(Id, Expr<S>, Expr<S>) -> ExprEnum<S>,
     binders: Vec<cst::Binder>,
     body: cst::Expr,
@@ -158,7 +151,7 @@ pub struct Def<S> {
     pub term: Option<Expr<S>>,
 }
 
-impl<S: Sort> Def<S> {
+impl<S> Def<S> {
     fn from_cst(cst: cst::Def) -> Self {
         Def {
             id: cst.id,
@@ -168,7 +161,7 @@ impl<S: Sort> Def<S> {
     }
 }
 
-pub fn program_from_cst<S: Sort>(cst: Vec<cst::Def>) -> Vec<Def<S>> {
+pub fn program_from_cst<S>(cst: Vec<cst::Def>) -> Vec<Def<S>> {
     cst.into_iter().map(Def::from_cst).collect()
 }
 
@@ -187,15 +180,6 @@ impl Display for USort {
             USort::Triangle => '△',
         };
         write!(f, "{}", c)
-    }
-}
-
-impl Sort for USort {
-    fn type_sort() -> Self {
-        USort::Type
-    }
-    fn kind_sort() -> Self {
-        USort::Kind
     }
 }
 
