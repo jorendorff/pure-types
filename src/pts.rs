@@ -109,7 +109,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
             }
             (_, Var(y)) => {
                 let defn = expected.env.get(y).unwrap().def.clone();
-                self.unify(actual, defn.clone(), env_map)?;
+                self.unify(actual, defn, env_map)?;
             }
             (Undefined(u), Undefined(v)) => {
                 // XXX TODO improve error message, ew
