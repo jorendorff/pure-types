@@ -26,7 +26,7 @@ struct Context<S> {
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
     pub fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
-        let cx = Context {
+        let mut cx = Context {
             system: self.clone(),
             blanks: vec![],
         };
@@ -38,7 +38,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
         env: &Env<S>,
         program: Vec<Def<S>>,
     ) -> Result<Env<S>, TypeCheckError<S>> {
-        let cx = Context {
+        let mut cx = Context {
             system: self.clone(),
             blanks: vec![],
         };
@@ -93,7 +93,8 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                 if *x != *y {
                     return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term));
                 } else {
-                    todo!("unifying variables");
+                    // XXX BUG - should succeed if these names refer to the same binding
+                    // or if they have definitionally equivalent values.
                 }
             }
             (Var(x), _) => {
@@ -157,7 +158,10 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     env_map.insert(p.clone(), q.clone()),
                 )?;
             }
+            // XXX TODO: handle unifying `foo bar = t` where `foo` is a
+            // variable defined as a lambda
             (Apply(f, _), _) if f.is_lambda() => {
+                // Reduce `actual` and retry.
                 self.unify(self.beta_reduce(actual), expected, env_map)?;
             }
             (_, Apply(g, _)) if g.is_lambda() => {
@@ -166,7 +170,8 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
             }
             (Apply(f, a), Apply(g, b)) => {
                 // Of course in general it's not possible to determine whether f x = g y,
-                // but for definitional equivalence it's
+                // but for definitional equivalence it's sufficient to check if f = g and x = y.
+                // This covers some important cases like `list t = list t`.
                 let f = Thunk {
                     term: f.clone(),
                     env: actual.env.clone(),
@@ -211,7 +216,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         }
     }
 
-    fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
+    fn check_expr(&mut self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
         let env = expr.env.clone();
         Ok(match expr.term.inner() {
             ExprEnum::ConstSort(s) => {
@@ -271,13 +276,20 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                 let f_ty = self.check_expr(&f_thunk)?;
                 if let ExprEnum::Pi(param, expected_arg_ty, body_ty_expr) = f_ty.term.inner() {
                     let actual_arg_ty: Thunk<S> = self.check_expr(&arg_thunk)?;
-                    let expected_arg_ty: Expr<S> = expected_arg_ty.clone();
-                    // XXX FIXME bug
-                    if actual_arg_ty.term != expected_arg_ty {
+                    let expected_arg_ty = Thunk {
+                        term: expected_arg_ty.clone(),
+                        env: f_ty.env.clone(),
+                    };
+                    if let Err(err) = self.unify(
+                        actual_arg_ty.clone(),
+                        expected_arg_ty.clone(),
+                        HashTrieMap::new(),
+                    ) {
                         return Err(TypeCheckError::ArgumentTypeMismatch(
                             expr.term.clone(),
-                            expected_arg_ty,
+                            expected_arg_ty.term,
                             actual_arg_ty.term,
+                            Box::new(err),
                         ));
                     }
                     Thunk {
@@ -363,7 +375,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
     }
 
     fn check_pi_type(
-        &self,
+        &mut self,
         param_ty_ty_thunk: Thunk<S>,
         body_ty_thunk: Thunk<S>,
         parameter_error: &dyn Fn() -> TypeCheckError<S>,
@@ -391,7 +403,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
     }
 
     fn check_program(
-        &self,
+        &mut self,
         env: &Env<S>,
         program: Vec<Def<S>>,
     ) -> Result<Env<S>, TypeCheckError<S>> {
@@ -399,16 +411,32 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         for def in program {
             let ty = if let Some(defined_ty) = &def.ty {
                 // There's a defined type; type-check to make sure it's not nonsense.
-                self.check_expr(&Thunk {
+                let defined_ty_thunk = Thunk {
                     env: env.clone(),
                     term: defined_ty.clone(),
-                })?;
+                };
+                self.check_expr(&defined_ty_thunk)?;
 
                 if let Some(term) = &def.term {
-                    let env = env.clone();
-                    let term = term.clone();
-                    let actual_ty = self.check_expr(&Thunk { env, term })?;
-                    assert_eq!(actual_ty.term, *defined_ty); // TODO unify
+                    let actual_thunk = Thunk {
+                        env: env.clone(),
+                        term: term.clone(),
+                    };
+                    let actual_ty = self.check_expr(&actual_thunk)?;
+                    if let Err(err) = self.unify(
+                        actual_ty.clone(),
+                        defined_ty_thunk.clone(),
+                        HashTrieMap::new(),
+                    ) {
+                        return Err(TypeCheckError::DefinedTypeMismatch(
+                            def.id,
+                            defined_ty_thunk.term,
+                            actual_thunk.term,
+                            actual_ty.term,
+                            Box::new(err),
+                        ));
+                    }
+
                     actual_ty
                 } else {
                     // XXX hopeless env confusion
@@ -438,6 +466,8 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use anyhow::Context;
 
     #[cfg(test)]
@@ -579,10 +609,21 @@ mod tests {
         );
     }
 
+    fn dump<E: Error>(err: E) {
+        let mut s: Option<&dyn Error> = Some(&err);
+        while let Some(err) = s {
+            eprintln!("{}", err);
+            s = err.source();
+        }
+    }
+
     fn assert_checks_in_system_u(program: &'static str) {
         let u = system_u();
         let base_env = u_env();
-        u.check_program(&base_env, parse_program(program)).unwrap();
+        if let Err(err) = u.check_program(&base_env, parse_program(program)) {
+            dump(err);
+            panic!("failed to type-check program");
+        }
     }
 
     #[test]
