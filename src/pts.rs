@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     ast::{self, Def, ExprEnum},
-    Binding, Env, Expr, Thunk, TypeCheckError,
+    Binding, Env, Expr, Id, Thunk, TypeCheckError,
 };
 
 #[derive(Clone)]
@@ -17,10 +17,12 @@ pub struct PureTypeSystem<S> {
     pub rules: HashMap<(S, S), S>,
 }
 
+#[derive(Clone)]
 struct Context<S> {
     system: PureTypeSystem<S>,
     blanks: Vec<Option<Thunk<S>>>,
     next_undefined: usize,
+    next_gensym: usize,
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
@@ -29,6 +31,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
             system: self.clone(),
             blanks: vec![],
             next_undefined: 0,
+            next_gensym: 0,
         }
     }
 
@@ -45,14 +48,27 @@ impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
     }
 }
 
-impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
-    fn undefined(&mut self) -> Thunk<S> {
+impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
+    fn new_blank(&mut self) -> Expr<S> {
+        let n = self.blanks.len();
+        self.blanks.push(None);
+        ast::blank(n)
+    }
+
+    fn undefined(&mut self, message: &str) -> Thunk<S> {
         let id = self.next_undefined;
         self.next_undefined += 1;
+        println!("defining #undef{} for {}", id, message);
         Thunk {
             term: ast::undefined(id),
             env: Env::new(),
         }
+    }
+
+    fn gensym(&mut self) -> Id {
+        let n = self.next_gensym;
+        self.next_gensym += 1;
+        Id::from(format!("${}", n))
     }
 
     fn lookup_blank(&mut self, mut i: usize) -> Thunk<S> {
@@ -77,6 +93,11 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         }
     }
 
+    fn fill_blank(&mut self, i: usize, thunk: &Thunk<S>) {
+        assert!(self.blanks[i].is_none());
+        self.blanks[i] = Some(thunk.clone());
+    }
+
     fn unify(
         &mut self,
         mut actual: Thunk<S>,
@@ -95,8 +116,10 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         // structure.
 
         match (actual.term.inner(), expected.term.inner()) {
-            (Blank(i), _) => self.blanks[*i] = Some(expected.clone()),
-            (_, Blank(j)) => self.blanks[*j] = Some(actual.clone()),
+            // XXX BUG: since `actual.env != expected.env`, we may be filling
+            // with an expression that means something else on the other side.
+            (Blank(i), _) => self.fill_blank(*i, &expected),
+            (_, Blank(j)) => self.fill_blank(*j, &actual),
             (Var(x), _) => {
                 let defn = actual.env.get(x).unwrap().def.clone();
                 self.unify(defn, expected)?;
@@ -129,7 +152,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                 )?;
 
                 let param_binding = Binding {
-                    def: self.undefined(),
+                    def: self.undefined(&format!("param {}/{}", p, q)),
                     ty: Thunk {
                         term: q_ty.clone(),
                         env: expected.env.clone(),
@@ -148,36 +171,25 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
             }
             // XXX TODO: handle unifying `foo bar = t` where `foo` is a
             // variable defined as a lambda
-            (Apply(f, _), _) if f.is_lambda() => {
-                // Reduce `actual` and retry.
-                self.unify(self.beta_reduce(actual), expected)?;
-            }
-            (_, Apply(g, _)) if g.is_lambda() => {
-                // Reduce `expected` and retry.
-                self.unify(actual, self.beta_reduce(expected))?;
-            }
             (Apply(f, a), Apply(g, b)) => {
-                // Of course in general it's not possible to determine whether f x = g y,
-                // but for definitional equivalence it's sufficient to check if f = g and x = y.
-                // This covers some important cases like `list t = list t`.
-                let f = Thunk {
-                    term: f.clone(),
-                    env: actual.env.clone(),
-                };
-                let g = Thunk {
-                    term: g.clone(),
-                    env: expected.env.clone(),
-                };
-                self.unify(f, g)?;
-                let a = Thunk {
-                    term: a.clone(),
-                    env: actual.env.clone(),
-                };
-                let b = Thunk {
-                    term: b.clone(),
-                    env: expected.env.clone(),
-                };
-                self.unify(a, b)?;
+                if !self.try_naive_unification(f, a, &actual.env, g, b, &expected.env) {
+                    if let Some(new_actual) = self.try_reduce(f, a, &actual.env) {
+                        self.unify(new_actual, expected)?;
+                    } else {
+                        let new_expected = self.reduce(g, b, &expected.env)?;
+                        self.unify(actual, new_expected)?;
+                    }
+                }
+            }
+            (Apply(f, a), _) => {
+                // Reduce `actual` and retry.
+                let new_actual = self.reduce(f, a, &actual.env)?;
+                self.unify(new_actual, expected)?;
+            }
+            (_, Apply(g, b)) => {
+                // Reduce `expected` and retry.
+                let new_expected = self.reduce(g, b, &expected.env)?;
+                self.unify(actual, new_expected)?;
             }
             (_, _) => return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term)),
         }
@@ -185,22 +197,106 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
         Ok(())
     }
 
-    fn beta_reduce(&self, app: Thunk<S>) -> Thunk<S> {
-        let (fun, arg) = app.term.as_apply();
-        let (p, p_ty, body) = fun.as_lambda();
+    fn try_reduce(&mut self, fun: &Expr<S>, arg: &Expr<S>, env: &Env<S>) -> Option<Thunk<S>> {
+        let saved_state = self.clone();
+        if let Ok(thunk) = self.reduce(fun, arg, env) {
+            Some(thunk)
+        } else {
+            *self = saved_state;
+            println!(
+                "reduce failed, rolled back to {} undefined bindings",
+                self.next_undefined
+            );
+            None
+        }
+    }
+
+    fn reduce(
+        &mut self,
+        fun: &Expr<S>,
+        arg: &Expr<S>,
+        env: &Env<S>,
+    ) -> Result<Thunk<S>, TypeCheckError<S>> {
+        println!("reducing {}", ast::apply(fun.clone(), arg.clone()));
+        let param = self.gensym();
+        let param_ty = self.new_blank();
+        let body = self.new_blank();
+        let pattern = Thunk {
+            term: ast::lambda(param.clone(), param_ty.clone(), body.clone()),
+            env: env.clone(),
+        };
+        // XXX BUG - need to be able to unify "identifier blanks" or else
+        // reconstruct the body of the lambda around `gensym`, or this will
+        // never work
+        // But is there another bug...?
+        self.unify(
+            Thunk {
+                term: fun.clone(),
+                env: env.clone(),
+            },
+            pattern,
+        )?;
         let param_binding = Binding {
             def: Thunk {
-                term: arg,
-                env: app.env.clone(),
+                term: arg.clone(),
+                env: env.clone(),
             },
             ty: Thunk {
-                term: p_ty,
-                env: app.env.clone(),
+                term: param_ty,
+                env: Env::new(),
             },
         };
-        Thunk {
+        Ok(Thunk {
             term: body,
-            env: app.env.with(p, param_binding),
+            env: env.with(param, param_binding),
+        })
+    }
+
+    /// Attempt to unify `f a = g b` by unifying `f = g` and `a = b`.
+    /// Returns true on success; rolls back the failed inferences on failure.
+    ///
+    /// Of course this will fail in many cases where in fact the two
+    /// expressions are definitionally equivalent. But it is necessary to cover
+    /// some important cases like `list t = list t`, where the function has no
+    /// known definition as a lambda. It's a nice optimization too: this will
+    /// succeed or fail faster than fully reducing the two expressions.
+    fn try_naive_unification(
+        &mut self,
+        f: &Expr<S>,
+        a: &Expr<S>,
+        fa_env: &Env<S>,
+        g: &Expr<S>,
+        b: &Expr<S>,
+        gb_env: &Env<S>,
+    ) -> bool {
+        let saved_state = self.clone();
+
+        let f = Thunk {
+            term: f.clone(),
+            env: fa_env.clone(),
+        };
+        let g = Thunk {
+            term: g.clone(),
+            env: gb_env.clone(),
+        };
+        let a = Thunk {
+            term: a.clone(),
+            env: fa_env.clone(),
+        };
+        let b = Thunk {
+            term: b.clone(),
+            env: gb_env.clone(),
+        };
+
+        if let Ok(()) = self.unify(f, g).and_then(|()| self.unify(a, b)) {
+            true
+        } else {
+            *self = saved_state;
+            println!(
+                "naive unification failed, rolled back to {} undefined bindings",
+                self.next_undefined
+            );
+            false
         }
     }
 
@@ -236,7 +332,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                         param.clone(),
                         Binding {
                             ty: param_ty_thunk,
-                            def: self.undefined(),
+                            def: self.undefined(&format!("Π parameter {}", param)),
                         },
                     ),
                 };
@@ -305,7 +401,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     param.clone(),
                     Binding {
                         ty: param_ty_thunk,
-                        def: self.undefined(),
+                        def: self.undefined(&format!("λ parameter {}", param)),
                     },
                 );
                 let body_thunk = Thunk {
@@ -439,7 +535,7 @@ impl<S: Clone + Display + Debug + Hash + Eq> Context<S> {
                     term,
                     env: env.clone(),
                 },
-                None => self.undefined(),
+                None => self.undefined(&format!("axiom {}", def.id)),
             };
             env = env.with(def.id, Binding { def: def_thunk, ty });
         }
@@ -662,10 +758,17 @@ mod tests {
             "λ t : Type . λ v : t . (λ x : t . x) v",
             "λ t : Type . λ v : t . v",
         );
+
+        // another flavor of beta-equivalence
+        assert_unify_in_system_u(
+            "λ (list : Type -> Type) (nat : Type) .
+                     list (list nat)",
+            "λ (list : Type -> Type) (nat : Type) .
+                     (λ (f : Type -> Type) (x : Type) . f (f x)) list nat",
+        );
     }
 
     #[test]
-    #[ignore]
     fn not_false() {
         assert_checks_in_system_u(
             "

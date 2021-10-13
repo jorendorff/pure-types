@@ -4,7 +4,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use rpds::HashTrieMap;
 
-use crate::{ast, Expr, Id};
+use crate::{Expr, Id};
 
 /// A static environment, mapping identifiers to type-expressions.
 #[derive(Clone)]

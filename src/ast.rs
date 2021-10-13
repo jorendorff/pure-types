@@ -94,29 +94,6 @@ impl<S> Expr<S> {
     pub(crate) fn inner(&self) -> &ExprEnum<S> {
         &self.0
     }
-
-    pub(crate) fn is_lambda(&self) -> bool {
-        match self.inner() {
-            ExprEnum::Lambda(..) => true,
-            _ => false,
-        }
-    }
-
-    pub(crate) fn as_lambda(&self) -> (Id, Expr<S>, Expr<S>) {
-        if let ExprEnum::Lambda(p, p_ty, body) = self.inner() {
-            (p.clone(), p_ty.clone(), body.clone())
-        } else {
-            panic!("lambda expected");
-        }
-    }
-
-    pub(crate) fn as_apply(&self) -> (Expr<S>, Expr<S>) {
-        if let ExprEnum::Apply(fun, arg) = self.inner() {
-            (fun.clone(), arg.clone())
-        } else {
-            panic!("lambda expected");
-        }
-    }
 }
 
 fn desugar_binders<S>(
