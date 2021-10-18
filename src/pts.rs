@@ -155,8 +155,9 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
         // structure.
 
         match (actual.term.inner(), expected.term.inner()) {
-            // XXX BUG: since `actual.env != expected.env`, we may be filling
+            // Note: since `actual.env != expected.env`, we may be filling
             // with an expression that means something else on the other side.
+            // We bring the environment, too, though, so it works. (?)
             (Blank(i), _) => self.fill_blank(*i, &expected),
             (_, Blank(j)) => self.fill_blank(*j, &actual),
             (Var(x), _) => {
