@@ -65,27 +65,37 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
         }
     }
 
-    fn gensym(&mut self) -> Id {
-        let n = self.next_gensym;
-        self.next_gensym += 1;
-        Id::from(format!("${}", n))
+    fn shorten_chain(&mut self, mut start: usize, end: usize) {
+        let stamp = Some(Thunk {
+            env: Env::new(),
+            term: ast::blank(end),
+        });
+        while end != start {
+            if let ExprEnum::Blank(next) = self.blanks[start].as_mut().unwrap().term.inner() {
+                start = *next;
+                self.blanks[start] = stamp.clone();
+            } else {
+                unreachable!();
+            }
+        }
     }
 
-    fn lookup_blank(&mut self, mut i: usize) -> Thunk<S> {
+    fn lookup_blank(&mut self, i: usize) -> Thunk<S> {
+        let mut c = i;
         loop {
-            match &mut self.blanks[i] {
+            match &mut self.blanks[c] {
                 Some(expr) => {
                     if let ExprEnum::Blank(j) = expr.term.inner() {
-                        i = *j;
+                        c = *j;
                     } else {
-                        // TODO shorten chain
-                        return expr.clone();
+                        self.shorten_chain(i, c);
+                        return self.blanks[c].clone().unwrap();
                     }
                 }
                 None => {
-                    // TODO shorten chain
+                    self.shorten_chain(i, c);
                     return Thunk {
-                        term: ast::blank(i),
+                        term: ast::blank(c),
                         env: Env::new(),
                     };
                 }
