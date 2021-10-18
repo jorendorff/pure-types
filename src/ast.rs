@@ -14,13 +14,6 @@ pub type Id = string_cache::DefaultAtom;
 #[derive(PartialEq)]
 pub struct Expr<S>(pub(crate) Rc<ExprEnum<S>>);
 
-// Manual implementation, as `#[derive(Clone)]` derives an unwanted `S: Clone` bound.
-impl<S> Clone for Expr<S> {
-    fn clone(&self) -> Self {
-        Expr(self.0.clone())
-    }
-}
-
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum ExprEnum<S> {
     ConstSort(S),
@@ -35,6 +28,13 @@ pub(crate) enum ExprEnum<S> {
     /// Used for bindings that are not defined as equivalent to particular
     /// expressions, like lambda bindings and axioms.
     Undefined(usize),
+}
+
+// Manual implementation, as `#[derive(Clone)]` derives an unwanted `S: Clone` bound.
+impl<S> Clone for Expr<S> {
+    fn clone(&self) -> Self {
+        Expr(self.0.clone())
+    }
 }
 
 impl<S: Display> Display for Expr<S> {
@@ -178,7 +178,7 @@ pub fn pi<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
 }
 
 pub fn arrow<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Pi(Id::from("_"), f, a)))
+    pi("_", f, a)
 }
 
 pub fn sort<S>(s: S) -> Expr<S> {
