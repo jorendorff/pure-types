@@ -62,4 +62,10 @@ pub enum TypeCheckError<S: Display + 'static> {
 
     #[error("can't type-check expressions containing blanks")]
     Blank,
+
+    #[error("can't reduce blank")]
+    ReduceBlank,
+
+    #[error("expected lambda, got `{0}`")]
+    ExpectedLambda(String),
 }

@@ -94,6 +94,10 @@ impl<S> Expr<S> {
     pub(crate) fn inner(&self) -> &ExprEnum<S> {
         &self.0
     }
+
+    pub fn is_blank(&self) -> bool {
+        matches!(self.inner(), ExprEnum::Blank(_))
+    }
 }
 
 fn desugar_binders<S>(

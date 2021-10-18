@@ -98,6 +98,35 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
         self.blanks[i] = Some(thunk.clone());
     }
 
+    fn reduce_to_lambda(
+        &mut self,
+        value: Thunk<S>,
+    ) -> Result<(Id, Expr<S>, Expr<S>, Env<S>), TypeCheckError<S>> {
+        match value.term.inner() {
+            ExprEnum::Lambda(id, ty, body) => {
+                Ok((id.clone(), ty.clone(), body.clone(), value.env.clone()))
+            }
+            ExprEnum::Blank(i) => {
+                let value = self.lookup_blank(*i);
+                if value.term.is_blank() {
+                    return Err(TypeCheckError::ReduceBlank);
+                }
+                self.reduce_to_lambda(value)
+            }
+            ExprEnum::Var(x) => {
+                let value = value.env.get(x).unwrap().def.clone();
+                self.reduce_to_lambda(value)
+            }
+            ExprEnum::Apply(fun, arg) => {
+                let value = self.reduce_app(fun, arg, &value.env)?;
+                self.reduce_to_lambda(value)
+            }
+            _ => {
+                return Err(TypeCheckError::ExpectedLambda(format!("{}", value.term)));
+            }
+        }
+    }
+
     fn unify(
         &mut self,
         mut actual: Thunk<S>,
@@ -169,26 +198,24 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
                     },
                 )?;
             }
-            // XXX TODO: handle unifying `foo bar = t` where `foo` is a
-            // variable defined as a lambda
             (Apply(f, a), Apply(g, b)) => {
                 if !self.try_naive_unification(f, a, &actual.env, g, b, &expected.env) {
-                    if let Some(new_actual) = self.try_reduce(f, a, &actual.env) {
+                    if let Some(new_actual) = self.try_reduce_app(f, a, &actual.env) {
                         self.unify(new_actual, expected)?;
                     } else {
-                        let new_expected = self.reduce(g, b, &expected.env)?;
+                        let new_expected = self.reduce_app(g, b, &expected.env)?;
                         self.unify(actual, new_expected)?;
                     }
                 }
             }
             (Apply(f, a), _) => {
                 // Reduce `actual` and retry.
-                let new_actual = self.reduce(f, a, &actual.env)?;
+                let new_actual = self.reduce_app(f, a, &actual.env)?;
                 self.unify(new_actual, expected)?;
             }
             (_, Apply(g, b)) => {
                 // Reduce `expected` and retry.
-                let new_expected = self.reduce(g, b, &expected.env)?;
+                let new_expected = self.reduce_app(g, b, &expected.env)?;
                 self.unify(actual, new_expected)?;
             }
             (_, _) => return Err(TypeCheckError::UnifyMismatch(expected.term, actual.term)),
@@ -197,9 +224,9 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
         Ok(())
     }
 
-    fn try_reduce(&mut self, fun: &Expr<S>, arg: &Expr<S>, env: &Env<S>) -> Option<Thunk<S>> {
+    fn try_reduce_app(&mut self, fun: &Expr<S>, arg: &Expr<S>, env: &Env<S>) -> Option<Thunk<S>> {
         let saved_state = self.clone();
-        if let Ok(thunk) = self.reduce(fun, arg, env) {
+        if let Ok(thunk) = self.reduce_app(fun, arg, env) {
             Some(thunk)
         } else {
             *self = saved_state;
@@ -211,31 +238,18 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
         }
     }
 
-    fn reduce(
+    fn reduce_app(
         &mut self,
         fun: &Expr<S>,
         arg: &Expr<S>,
         env: &Env<S>,
     ) -> Result<Thunk<S>, TypeCheckError<S>> {
         println!("reducing {}", ast::apply(fun.clone(), arg.clone()));
-        let param = self.gensym();
-        let param_ty = self.new_blank();
-        let body = self.new_blank();
-        let pattern = Thunk {
-            term: ast::lambda(param.clone(), param_ty.clone(), body.clone()),
+        let (param, param_ty, body, lambda_env) = self.reduce_to_lambda(Thunk {
+            term: fun.clone(),
             env: env.clone(),
-        };
-        // XXX BUG - need to be able to unify "identifier blanks" or else
-        // reconstruct the body of the lambda around `gensym`, or this will
-        // never work
-        // But is there another bug...?
-        self.unify(
-            Thunk {
-                term: fun.clone(),
-                env: env.clone(),
-            },
-            pattern,
-        )?;
+        })?;
+
         let param_binding = Binding {
             def: Thunk {
                 term: arg.clone(),
@@ -243,12 +257,12 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
             },
             ty: Thunk {
                 term: param_ty,
-                env: Env::new(),
+                env: lambda_env.clone(),
             },
         };
         Ok(Thunk {
             term: body,
-            env: env.with(param, param_binding),
+            env: lambda_env.with(param, param_binding),
         })
     }
 
