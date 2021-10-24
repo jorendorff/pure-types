@@ -18,7 +18,7 @@ pub struct PureTypeSystem<S> {
 }
 
 #[derive(Clone)]
-struct Context<S> {
+pub struct Context<S> {
     system: PureTypeSystem<S>,
     blanks: Vec<Option<Thunk<S>>>,
     next_undefined: usize,
@@ -26,25 +26,13 @@ struct Context<S> {
 }
 
 impl<S: Clone + Display + Debug + Hash + Eq> PureTypeSystem<S> {
-    fn new_context(&self) -> Context<S> {
+    pub fn new_context(&self) -> Context<S> {
         Context {
             system: self.clone(),
             blanks: vec![],
             next_undefined: 0,
             next_gensym: 0,
         }
-    }
-
-    pub fn check_expr(&self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
-        self.new_context().check_expr(expr)
-    }
-
-    pub fn check_program(
-        &self,
-        env: &Env<S>,
-        program: Vec<Def<S>>,
-    ) -> Result<Env<S>, TypeCheckError<S>> {
-        self.new_context().check_program(env, program)
     }
 }
 
@@ -105,7 +93,19 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
 
     fn fill_blank(&mut self, i: usize, thunk: &Thunk<S>) {
         assert!(self.blanks[i].is_none());
+        if let ExprEnum::Blank(j) = thunk.term.inner() {
+            assert_ne!(i, *j);
+        }
         self.blanks[i] = Some(thunk.clone());
+    }
+
+    fn blank_is_defined(&mut self, blank: &Expr<S>) -> bool {
+        if let ExprEnum::Blank(i) = blank.inner() {
+            let v = self.lookup_blank(*i);
+            !v.term.is_blank()
+        } else {
+            true
+        }
     }
 
     fn reduce_to_lambda(
@@ -165,6 +165,10 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
                 self.unify(defn, expected)?;
             }
             (_, Var(y)) => {
+                println!(
+                    "looking up `{}` in context of expression `{}`",
+                    y, expected.term
+                );
                 let defn = expected.env.get(y).unwrap().def.clone();
                 self.unify(actual, defn)?;
             }
@@ -271,6 +275,7 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
                 env: lambda_env.clone(),
             },
         };
+        println!("the result is {}", body);
         Ok(Thunk {
             term: body,
             env: lambda_env.with(param, param_binding),
@@ -325,7 +330,7 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
         }
     }
 
-    fn check_expr(&mut self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
+    pub fn check_expr(&mut self, expr: &Thunk<S>) -> Result<Thunk<S>, TypeCheckError<S>> {
         let env = expr.env.clone();
         Ok(match expr.term.inner() {
             ExprEnum::ConstSort(s) => {
@@ -425,7 +430,7 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
                 let body_env = env.with(
                     param.clone(),
                     Binding {
-                        ty: param_ty_thunk,
+                        ty: param_ty_thunk.clone(),
                         def: self.undefined(&format!("λ parameter {}", param)),
                     },
                 );
@@ -449,13 +454,37 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
                     &|s1, s2| TypeCheckError::InvalidLambdaSorts(expr.term.clone(), s1, s2),
                 )?;
 
-                // XXX TODO: hopeless environment confusion here
+                // Hack: we have param_ty_thunk and we need to jam it into a
+                // new pi-expression while preserving its environment. Use a
+                // blank to do this. It works because a blank is a term that
+                // dereferences to a thunk.
+                let param_ty_blank = self.new_blank();
+                println!(
+                    "value of synthetic blank `{}` is `{}`",
+                    param_ty_blank, param_ty_thunk.term
+                );
+                self.unify(
+                    Thunk {
+                        term: param_ty_blank.clone(),
+                        env: Env::new(),
+                    },
+                    param_ty_thunk,
+                )?;
+                assert!(self.blank_is_defined(&param_ty_blank));
+
                 Thunk {
-                    term: ast::pi(param, param_ty.clone(), body_ty),
+                    term: ast::pi(param, param_ty_blank, body_ty),
                     env,
                 }
             }
-            ExprEnum::Blank(_) | ExprEnum::Undefined(_) => {
+            ExprEnum::Blank(i) => {
+                let expr = self.lookup_blank(*i);
+                if expr.term.is_blank() {
+                    return Err(TypeCheckError::Blank);
+                }
+                self.check_expr(&expr)?
+            }
+            ExprEnum::Undefined(_) => {
                 return Err(TypeCheckError::Blank);
             }
         })
@@ -507,7 +536,7 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
         }
     }
 
-    fn check_program(
+    pub fn check_program(
         &mut self,
         env: &Env<S>,
         program: Vec<Def<S>>,
@@ -566,16 +595,30 @@ impl<S: Clone + Display + Debug + Hash + Eq + 'static> Context<S> {
         }
         Ok(env)
     }
+
+    #[cfg(test)]
+    #[track_caller]
+    fn assert_unify(&mut self, actual: Thunk<S>, expected: Thunk<S>) {
+        if let Err(err) = self.unify(actual.clone(), expected.clone()) {
+            dump(err);
+            panic!("failed to unify `{}` with `{}`", actual.term, expected.term);
+        }
+    }
+}
+
+#[cfg(test)]
+fn dump<E: std::error::Error>(err: E) {
+    let mut s: Option<&dyn std::error::Error> = Some(&err);
+    while let Some(err) = s {
+        eprintln!("{}", err);
+        s = err.source();
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
 
     use anyhow::Context;
-
-    #[cfg(test)]
-    use pretty_assertions::assert_eq;
 
     use super::*;
     use crate::ast::*;
@@ -653,9 +696,20 @@ mod tests {
     fn test_id() {
         let u = system_u();
 
+        // This test is currently failing because type inference makes the type
+        // of this lambda `Π (t : #_1) (x : #_0), t` where the second t, I
+        // think, is bound in an environment synthesized for the outer lambda.
+        //
+        // Blanks can end up bound to expressions in temporary environments,
+        // and then the blank-binding outlives the scope. It's a problem that
+        // blanks are thunks. I can't quite put my finger on the problem,
+        // though.
+
         // λ (t : *), λ (x : t), x
         let id_expr = lambda("t", sort(Type), lambda("x", var("t"), var("x")));
-        let id_type = u
+
+        let mut cx = u.new_context();
+        let id_type = cx
             .check_expr(&Thunk {
                 term: id_expr,
                 env: Env::new(),
@@ -663,9 +717,12 @@ mod tests {
             .unwrap();
 
         // Π (t : *), Π (x : t), t
-        assert_eq!(
-            id_type.term,
-            pi("t", sort(Type), pi("x", var("t"), var("t"))),
+        cx.assert_unify(
+            id_type,
+            Thunk {
+                term: pi("t", sort(Type), pi("x", var("t"), var("t"))),
+                env: Env::new(),
+            },
         );
     }
 
@@ -676,14 +733,16 @@ mod tests {
 
         let u = system_u();
         let env = u_env();
-        assert_eq!(u.check_expr(&Thunk { term, env }).unwrap().term, ty);
+        let mut cx = u.new_context();
+        assert_eq!(cx.check_expr(&Thunk { term, env }).unwrap().term, ty);
     }
 
     #[test]
     fn test_check_program() {
         let u = system_u();
         let base_env = u_env();
-        let actual_env = u
+        let mut cx = u.new_context();
+        let actual_env = cx
             .check_program(
                 &base_env,
                 parse_program(
@@ -698,34 +757,31 @@ mod tests {
             )
             .unwrap();
 
-        let get = |s| &actual_env.get(&Id::from(s)).unwrap().ty.term;
+        let get = |s| actual_env.get(&Id::from(s)).unwrap().ty.clone();
+        let thunk = |term| Thunk {
+            term,
+            env: Env::new(),
+        };
 
-        assert_eq!(get("true"), &var("Type"));
-        assert_eq!(get("true_intro"), &var("true"));
-        assert_eq!(
+        cx.assert_unify(get("true"), thunk(var("Type")));
+        cx.assert_unify(get("true_intro"), thunk(var("true")));
+        cx.assert_unify(
             get("tx"),
-            &pi("p", var("Type"), arrow(var("p"), var("true"))),
+            thunk(pi("p", var("Type"), arrow(var("p"), var("true")))),
         );
-        assert_eq!(get("false"), &var("Type"));
-        assert_eq!(
+        cx.assert_unify(get("false"), thunk(var("Type")));
+        cx.assert_unify(
             get("false_elim"),
-            &pi("p", var("Type"), arrow(var("false"), var("p"))),
+            thunk(pi("p", var("Type"), arrow(var("false"), var("p")))),
         );
-    }
-
-    fn dump<E: Error>(err: E) {
-        let mut s: Option<&dyn Error> = Some(&err);
-        while let Some(err) = s {
-            eprintln!("{}", err);
-            s = err.source();
-        }
     }
 
     #[track_caller]
     fn assert_checks_in_system_u(program: &'static str) {
         let u = system_u();
         let base_env = u_env();
-        if let Err(err) = u.check_program(&base_env, parse_program(program)) {
+        let mut cx = u.new_context();
+        if let Err(err) = cx.check_program(&base_env, parse_program(program)) {
             dump(err);
             panic!("failed to type-check program");
         }
@@ -757,10 +813,10 @@ mod tests {
         // in System U, but the return type would have to be another value, not
         // a type.
         let program = parse_program("axiom eq : Π (t : Type) . t -> t -> Type;");
-        assert!(u.check_program(&u_env(), program).is_err());
+        assert!(u.new_context().check_program(&u_env(), program).is_err());
 
         let program = parse_program("axiom nat : Type; axiom vect : Type -> nat -> Type;");
-        assert!(u.check_program(&u_env(), program).is_err());
+        assert!(u.new_context().check_program(&u_env(), program).is_err());
     }
 
     #[test]
@@ -775,21 +831,25 @@ mod tests {
     }
 
     #[test]
-    fn test_unify() {
-        // simple alpha-equivalence
+    fn test_alpha() {
+        // simple α-equivalence
         assert_unify_in_system_u("λ x : Type . x -> x", "λ y : Type . y -> y");
-        // beta-equivalence
+    }
+
+    #[test]
+    fn test_beta() {
+        // β-equivalence
         assert_unify_in_system_u(
             "λ t : Type . λ v : t . (λ x : t . x) v",
             "λ t : Type . λ v : t . v",
         );
 
-        // another flavor of beta-equivalence
+        // another flavor of β-equivalence
         assert_unify_in_system_u(
             "λ (list : Type -> Type) (nat : Type) .
-                     list (list nat)",
-            "λ (list : Type -> Type) (nat : Type) .
                      (λ (f : Type -> Type) (x : Type) . f (f x)) list nat",
+            "λ (list : Type -> Type) (nat : Type) .
+                     list (list nat)",
         );
     }
 
