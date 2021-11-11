@@ -5,7 +5,7 @@ use anyhow::Context;
 use crate::cst::*;
 use crate::parser::{ProgramParser, TermParser};
 
-fn parse(s: &'static str) -> Expr {
+fn parse(s: &'static str) -> Term {
     TermParser::new().parse(s).context("parse error").unwrap()
 }
 

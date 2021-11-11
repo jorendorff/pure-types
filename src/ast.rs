@@ -5,195 +5,154 @@ use std::{
     rc::Rc,
 };
 
-use crate::cst;
+use crate::{cst, Binding};
 
 /// The type of identifiers.
 pub type Id = string_cache::DefaultAtom;
 
-/// Expressions.
-#[derive(PartialEq)]
-pub struct Expr<S>(pub(crate) Rc<ExprEnum<S>>);
+#[derive(Clone)]
+pub struct Term(pub(crate) Rc<TermEnum>);
 
-#[derive(Clone, PartialEq, Debug)]
-pub(crate) enum ExprEnum<S> {
-    ConstSort(S),
-    Var(Id),
-    Pi(Id, Expr<S>, Expr<S>),
-    Apply(Expr<S>, Expr<S>),
-    Lambda(Id, Expr<S>, Expr<S>),
-
-    /// A placeholder.
-    Blank(usize),
-
-    /// Used for bindings that are not defined as equivalent to particular
-    /// expressions, like lambda bindings and axioms.
-    Undefined(usize),
+#[derive(Debug)]
+pub enum TermEnum {
+    Constant(Id),
+    Variable(Id),
+    Apply(Term, Term),
+    Lambda(Id, Term, Term),
+    Pi(Id, Term, Term),
+    Subst(Id, Binding, Term),
 }
 
-// Manual implementation, as `#[derive(Clone)]` derives an unwanted `S: Clone` bound.
-impl<S> Clone for Expr<S> {
-    fn clone(&self) -> Self {
-        Expr(self.0.clone())
-    }
-}
-
-impl<S: Display> Display for Expr<S> {
+impl Display for Term {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        <ExprEnum<S> as Display>::fmt(&self.0, f)
+        <TermEnum as Display>::fmt(&self.0, f)
     }
 }
 
-impl<S: Debug> Debug for Expr<S> {
+impl Debug for Term {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        <ExprEnum<S> as Debug>::fmt(&self.0, f)
+        <TermEnum as Debug>::fmt(&self.0, f)
     }
 }
 
-impl<S: Display> Display for ExprEnum<S> {
+impl Display for TermEnum {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         match self {
-            ExprEnum::ConstSort(s) => write!(f, "{}", *s),
-            ExprEnum::Var(v) => write!(f, "{}", v),
-            ExprEnum::Pi(p, p_ty, body) => write!(f, "Π ({} : {}) . {}", p, p_ty, body),
-            ExprEnum::Apply(fun, arg) => {
+            TermEnum::Constant(c) => write!(f, "#c{}", *c),
+            TermEnum::Variable(v) => write!(f, "{}", v),
+            TermEnum::Pi(p, p_ty, body) => write!(f, "Π ({} : {}) . {}", p, p_ty, body),
+            TermEnum::Apply(fun, arg) => {
                 match fun.inner() {
-                    ExprEnum::Pi(..) | ExprEnum::Lambda(..) => write!(f, "({})", fun)?,
+                    TermEnum::Pi(..) | TermEnum::Lambda(..) => write!(f, "({})", fun)?,
                     _ => write!(f, "{}", fun)?,
                 }
                 write!(f, " ")?;
                 match arg.inner() {
-                    ExprEnum::Pi(..) | ExprEnum::Lambda(..) | ExprEnum::Apply(..) => {
+                    TermEnum::Pi(..) | TermEnum::Lambda(..) | TermEnum::Apply(..) => {
                         write!(f, "({})", arg)
                     }
                     _ => write!(f, "{}", arg),
                 }
             }
-            ExprEnum::Lambda(p, p_ty, body) => write!(f, "λ ({} : {}) . {}", p, p_ty, body),
-            ExprEnum::Blank(n) => write!(f, "#_{}", n),
-            ExprEnum::Undefined(n) => write!(f, "#undef{}", n),
+            TermEnum::Lambda(p, p_ty, body) => write!(f, "λ ({} : {}) . {}", p, p_ty, body),
+            TermEnum::Subst(id, binding, body) => write!(f, "({})[{} {}]", body, id, binding),
         }
     }
 }
 
-impl<S> Expr<S> {
-    pub(crate) fn from_cst(expr: cst::Expr) -> Self {
+impl Term {
+    pub(crate) fn from_cst(expr: cst::Term) -> Self {
         match *expr.0 {
-            cst::ExprEnum::Var(id) => var(id),
-            cst::ExprEnum::Pi(binders, body) => desugar_binders(ExprEnum::Pi, binders, body),
-            cst::ExprEnum::Arrow(arg_ty, ret_ty) => {
+            cst::TermEnum::Var(id) => var(id),
+            cst::TermEnum::Pi(binders, body) => desugar_binders(TermEnum::Pi, binders, body),
+            cst::TermEnum::Arrow(arg_ty, ret_ty) => {
                 arrow(Self::from_cst(arg_ty), Self::from_cst(ret_ty))
             }
-            cst::ExprEnum::Lambda(binders, body) => {
-                desugar_binders(ExprEnum::Lambda, binders, body)
+            cst::TermEnum::Lambda(binders, body) => {
+                desugar_binders(TermEnum::Lambda, binders, body)
             }
-            cst::ExprEnum::Apply(fun, arg) => apply(Self::from_cst(fun), Self::from_cst(arg)),
-            cst::ExprEnum::Blank => blank(0),
+            cst::TermEnum::Apply(fun, arg) => apply(Self::from_cst(fun), Self::from_cst(arg)),
+            cst::TermEnum::Blank => blank(0),
         }
     }
 
-    pub(crate) fn inner(&self) -> &ExprEnum<S> {
+    pub(crate) fn inner(&self) -> &TermEnum {
         &self.0
-    }
-
-    pub fn is_blank(&self) -> bool {
-        matches!(self.inner(), ExprEnum::Blank(_))
     }
 }
 
-fn desugar_binders<S>(
-    construct: fn(Id, Expr<S>, Expr<S>) -> ExprEnum<S>,
+fn desugar_binders(
+    construct: fn(Id, Term, Term) -> TermEnum,
     binders: Vec<cst::Binder>,
-    body: cst::Expr,
-) -> Expr<S> {
+    body: cst::Term,
+) -> Term {
     binders
         .into_iter()
         .flat_map(|binder| {
             let ty = match binder.ty {
-                Some(ty) => Expr::from_cst(ty),
+                Some(ty) => Term::from_cst(ty),
                 None => blank(0),
             };
             binder.ids.into_iter().map(move |id| (id, ty.clone()))
         })
         .rev()
-        .fold(Expr::from_cst(body), |body, (id, ty)| {
-            Expr(Rc::new(construct(id, ty, body)))
+        .fold(Term::from_cst(body), |body, (id, ty)| {
+            Term(Rc::new(construct(id, ty, body)))
         })
 }
 
 #[derive(Debug)]
-pub struct Def<S> {
+pub struct Def {
     pub id: Id,
-    pub ty: Option<Expr<S>>,
-    pub term: Option<Expr<S>>,
+    pub ty: Option<Term>,
+    pub term: Option<Term>,
 }
 
-impl<S> Def<S> {
+impl Def {
     fn from_cst(cst: cst::Def) -> Self {
         Def {
             id: cst.id,
-            ty: cst.ty.map(Expr::from_cst),
-            term: cst.term.map(Expr::from_cst),
+            ty: cst.ty.map(Term::from_cst),
+            term: cst.term.map(Term::from_cst),
         }
     }
 }
 
-pub fn program_from_cst<S>(cst: Vec<cst::Def>) -> Vec<Def<S>> {
+pub fn program_from_cst(cst: Vec<cst::Def>) -> Vec<Def> {
     cst.into_iter().map(Def::from_cst).collect()
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum USort {
-    Type,
-    Kind,
-    Triangle,
-}
-
-impl Display for USort {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        let c = match self {
-            USort::Type => '∗',
-            USort::Kind => '◻',
-            USort::Triangle => '△',
-        };
-        write!(f, "{}", c)
-    }
 }
 
 // *** Convenience constructors
 
-pub fn var<S>(x: impl Into<Id>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Var(x.into())))
+pub fn constant(c: impl Into<Id>) -> Term {
+    Term(Rc::new(TermEnum::Constant(c.into())))
 }
 
-pub fn apply<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Apply(f, a)))
+pub fn var(x: impl Into<Id>) -> Term {
+    Term(Rc::new(TermEnum::Variable(x.into())))
 }
 
-pub fn lambda<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Lambda(p.into(), ty, b)))
+pub fn apply(f: Term, a: Term) -> Term {
+    Term(Rc::new(TermEnum::Apply(f, a)))
 }
 
-pub fn pi<S>(p: impl Into<Id>, ty: Expr<S>, b: Expr<S>) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Pi(p.into(), ty, b)))
+pub fn lambda(p: impl Into<Id>, ty: Term, b: Term) -> Term {
+    Term(Rc::new(TermEnum::Lambda(p.into(), ty, b)))
 }
 
-pub fn arrow<S>(f: Expr<S>, a: Expr<S>) -> Expr<S> {
+pub fn pi(p: impl Into<Id>, ty: Term, b: Term) -> Term {
+    Term(Rc::new(TermEnum::Pi(p.into(), ty, b)))
+}
+
+pub fn arrow(f: Term, a: Term) -> Term {
     pi("_", f, a)
 }
 
-pub fn sort<S>(s: S) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::ConstSort(s)))
+pub fn blank(_index: usize) -> Term {
+    panic!("no blanks please")
 }
 
-pub fn blank<S>(index: usize) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Blank(index)))
-}
-
-pub fn undefined<S>(undefined_id: usize) -> Expr<S> {
-    Expr(Rc::new(ExprEnum::Undefined(undefined_id)))
-}
-
-pub fn var_or_blank<S>(x: impl Into<Id>) -> Expr<S> {
+pub fn var_or_blank(x: impl Into<Id>) -> Term {
     let x = x.into();
     if x == Id::from("_") {
         blank(0)
@@ -202,6 +161,6 @@ pub fn var_or_blank<S>(x: impl Into<Id>) -> Expr<S> {
     }
 }
 
-pub fn def<S>(id: Id, ty: Option<Expr<S>>, term: Option<Expr<S>>) -> Def<S> {
+pub fn def(id: Id, ty: Option<Term>, term: Option<Term>) -> Def {
     Def { id, ty, term }
 }

@@ -1,4 +1,4 @@
-use crate::cst::{self, Binder, Def, Expr, Id};
+use crate::cst::{self, Binder, Def, Term, Id};
 
 grammar;
 
@@ -15,7 +15,7 @@ pub Program: Vec<Def> = {
     Def* => <>
 }
 
-pub Term: Expr = {
+pub Term: Term = {
     "λ" <binders:Binders> "." <b:Term> =>
         cst::lambda(binders, b),
     "Π" <binders:Binders> "." <b:Term> =>
@@ -38,21 +38,21 @@ Binder: Binder = {
         Binder { ids: vec![id], ty: None },
 }
 
-Op: Expr = {
+Op: Term = {
     <e:Call> =>
         e,
     <left:Call> "->" <right:Op> =>
         cst::arrow(left, right),
 }
 
-Call: Expr = {
+Call: Term = {
     <p:Prim> =>
         p,
     <f:Call> <a:Prim> =>
         cst::apply(f, a),
 }
 
-Prim: Expr = {
+Prim: Term = {
     "(" <t:Term> ")" =>
         t,
     <v:Id> =>
