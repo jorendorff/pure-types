@@ -136,6 +136,21 @@ impl Env {
 }
 
 impl PureTypeSystem {
+    pub fn new(axioms: &[(&str, &str)], rules: &[(&str, &str, &str)]) -> Rc<Self> {
+        Rc::new(PureTypeSystem {
+            axioms: axioms
+                .iter()
+                .cloned()
+                .map(|(s, t)| (Id::from(s), Id::from(t)))
+                .collect(),
+            function_sorts: rules
+                .iter()
+                .cloned()
+                .map(|(s, t, u)| ((Id::from(s), Id::from(t)), Id::from(u)))
+                .collect(),
+        })
+    }
+
     /// Return the empty environment.
     pub fn env(self: &Rc<Self>) -> Env {
         Env {

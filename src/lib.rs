@@ -8,6 +8,9 @@ mod parser_tests;
 lalrpop_mod!(pub parser);
 pub mod pts;
 
+#[cfg(test)]
+mod tests;
+
 pub use ast::{Id, Term};
 pub use env::{Binding, Env};
 pub use error::TypeCheckError;
