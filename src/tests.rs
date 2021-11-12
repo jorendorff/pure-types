@@ -98,7 +98,7 @@ fn test_church_numerals() {
 
             def num_to_nat : num -> nat :=
               λ a : num . a succ zero;
-            ",
+        ",
     );
 }
 
@@ -444,6 +444,14 @@ fn test_swap() {
               λ (a b : Type) . swap a b (and a b) (and_intro a b);
             ",
     );
+
+    // XXX TODO - this wording fails:
+    // def and_remix : Π (a b : Type) . b -> a -> and a b :=
+    //   λ (b a : Type) . swap b a (and b a) (and_intro b a);
+    //
+    // I think the bug is that partial evaluation leaves variables alone, so
+    // when we compare two λ or Π expressions we don't implement α-equivalence
+    // correctly. Same bug affects `test_and_or` below.
 }
 
 #[test]
