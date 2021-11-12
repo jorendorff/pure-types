@@ -82,22 +82,22 @@ fn assert_checks_in_stlc(program: &'static str) {
 fn test_church_numerals() {
     assert_checks_in_stlc(
         "
-            axiom nat : Type;
-            axiom zero : nat;
-            axiom succ : nat -> nat;
-            def num : Type := (nat -> nat) -> (nat -> nat);
-            axiom nat_ind : num -> (num -> num) -> nat -> num;
+        axiom nat : Type;
+        axiom zero : nat;
+        axiom succ : nat -> nat;
+        def num : Type := (nat -> nat) -> (nat -> nat);
+        axiom nat_ind : num -> (num -> num) -> nat -> num;
 
-            def zero_num : num := λ (f : nat -> nat) (x : nat) . x;
+        def zero_num : num := λ (f : nat -> nat) (x : nat) . x;
 
-            def succ_num : num -> num :=
-              λ (a : num) (f : nat -> nat) (x : nat) . f (a f x);
+        def succ_num : num -> num :=
+          λ (a : num) (f : nat -> nat) (x : nat) . f (a f x);
 
-            def nat_to_num : nat -> num :=
-              λ n : nat . nat_ind zero_num succ_num n;
+        def nat_to_num : nat -> num :=
+          λ n : nat . nat_ind zero_num succ_num n;
 
-            def num_to_nat : num -> nat :=
-              λ a : num . a succ zero;
+        def num_to_nat : num -> nat :=
+          λ a : num . a succ zero;
         ",
     );
 }
@@ -242,12 +242,12 @@ fn test_check_program() {
         &u_env(),
         &parse_program(
             "
-                axiom true : Type;
-                axiom true_intro : true;
-                def tx : Π (p : Type) . p -> true := λ (p : Type) . λ (_ : p) . true_intro;
-                axiom false : Type;
-                axiom false_elim : Π (p : Type) . false -> p;
-                ",
+            axiom true : Type;
+            axiom true_intro : true;
+            def tx : Π (p : Type) . p -> true := λ (p : Type) . λ (_ : p) . true_intro;
+            axiom false : Type;
+            axiom false_elim : Π (p : Type) . false -> p;
+            ",
         ),
     )
     .unwrap();
@@ -307,12 +307,12 @@ fn test_basic_application() {
     // end-to-end test of a function application
     assert_checks_in_system_u(
         "
-            axiom R : Type;
-            axiom Z : Type;
-            axiom floor : R -> Z;
-            axiom pi : R;
-            def three : Z := floor pi;
-            ",
+        axiom R : Type;
+        axiom Z : Type;
+        axiom floor : R -> Z;
+        axiom pi : R;
+        def three : Z := floor pi;
+        ",
     );
 }
 
@@ -320,12 +320,12 @@ fn test_basic_application() {
 fn test_call_id() {
     assert_checks_in_system_u(
         "
-            def id : Π (t : Type) . t -> t := λ (t : Type) . λ (x : t) . x;
+        def id : Π (t : Type) . t -> t := λ (t : Type) . λ (x : t) . x;
 
-            axiom nat : Type;
-            axiom zero : nat;
-            def very_zero : nat := id nat zero;
-            ",
+        axiom nat : Type;
+        axiom zero : nat;
+        def very_zero : nat := id nat zero;
+        ",
     );
 }
 
@@ -333,10 +333,10 @@ fn test_call_id() {
 fn imp_trans() {
     assert_checks_in_system_u(
         "
-            def imp_trans :
-              Π (a b c : Type) . (a -> b) -> (b -> c) -> a -> c :=
-                λ (a b c : Type) (ab : a -> b) (bc : b -> c) (h : a) . bc (ab h);
-            ",
+        def imp_trans :
+          Π (a b c : Type) . (a -> b) -> (b -> c) -> a -> c :=
+            λ (a b c : Type) (ab : a -> b) (bc : b -> c) (h : a) . bc (ab h);
+        ",
     );
 }
 
@@ -372,9 +372,9 @@ fn test_beta() {
     // another flavor of β-equivalence
     assert_jeq_in_system_u(
         "λ (list : Type -> Type) (nat : Type) .
-                     (λ (f : Type -> Type) (x : Type) . f (f x)) list nat",
+           (λ (f : Type -> Type) (x : Type) . f (f x)) list nat",
         "λ (list : Type -> Type) (nat : Type) .
-                     list (list nat)",
+           list (list nat)",
     );
 }
 
@@ -382,15 +382,15 @@ fn test_beta() {
 fn not_false() {
     assert_checks_in_system_u(
         "
-            axiom true : Type;
-            axiom true_intro : true;
+        axiom true : Type;
+        axiom true_intro : true;
 
-            axiom false : Type;
-            axiom false_elim : Π (x : Type) . false -> x;
+        axiom false : Type;
+        axiom false_elim : Π (x : Type) . false -> x;
 
-            def not : Type -> Type := λ (p : Type) . p -> false;
-            def not_false : not false := λ (f : false) . f;
-            ",
+        def not : Type -> Type := λ (p : Type) . p -> false;
+        def not_false : not false := λ (f : false) . f;
+        ",
     );
 }
 
@@ -418,11 +418,11 @@ fn test_nat_axioms_look_ok() {
     // depedent types.
     assert_checks_in_system_u(
         "
-            axiom nat : Type;
-            axiom zero : nat;
-            axiom succ : nat -> nat;
-            axiom nat_rec : Π a : Type . nat -> a -> (nat -> a) -> a;
-            ",
+        axiom nat : Type;
+        axiom zero : nat;
+        axiom succ : nat -> nat;
+        axiom nat_rec : Π a : Type . nat -> a -> (nat -> a) -> a;
+        ",
     );
 
     // axiom nat_ind : Π p : nat -> Type .
@@ -435,14 +435,14 @@ fn test_nat_axioms_look_ok() {
 fn test_swap() {
     assert_checks_in_system_u(
         "
-            def swap : Π (a b c : Type) . (a -> b -> c) -> b -> a -> c :=
-              λ (a b c : Type) (f : a -> b -> c) (y : b) (x : a) . f x y;
+        def swap : Π (a b c : Type) . (a -> b -> c) -> b -> a -> c :=
+          λ (a b c : Type) (f : a -> b -> c) (y : b) (x : a) . f x y;
 
-            axiom and : Type -> Type -> Type;
-            axiom and_intro : Π (a b : Type) . a -> b -> and a b;
-            def and_retro : Π (a b : Type) . b -> a -> and a b :=
-              λ (a b : Type) . swap a b (and a b) (and_intro a b);
-            ",
+        axiom and : Type -> Type -> Type;
+        axiom and_intro : Π (a b : Type) . a -> b -> and a b;
+        def and_retro : Π (a b : Type) . b -> a -> and a b :=
+          λ (a b : Type) . swap a b (and a b) (and_intro a b);
+        ",
     );
 
     // XXX TODO - this wording fails:
